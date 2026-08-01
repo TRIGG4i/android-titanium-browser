@@ -1,0 +1,1 @@
+Lis intégralement `CODEX_MASTER_INSTRUCTIONS.md`, considère-le comme la source de vérité du projet, puis commence par l’audit et la Phase 0. Travaille directement dans le dépôt, conserve des commits réversibles et ne passe pas à la refonte visuelle avant qu’un APK ARM64 témoin soit réellement construit et testé.
