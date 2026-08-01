@@ -1,0 +1,1 @@
+This repository already contains the full Codex brief in CODEX_MASTER_INSTRUCTIONS.md. This compatibility pointer exists only to avoid duplicate instruction files.
