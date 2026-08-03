@@ -87,6 +87,7 @@ gclient runhooks
 ./build/install-build-deps.sh --no-prompt
 
 source "$SCRIPT_DIR/patch.sh"
+mkdir -p out/Default
 cp "$SCRIPT_DIR/args.gn" out/Default/args.gn
 gn gen out/Default
 
