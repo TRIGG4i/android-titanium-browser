@@ -44,6 +44,8 @@ if [[ ! -d .git ]]; then
     git init
     git remote add origin "$CHROMIUM_SOURCE"
 fi
+git config user.name "Titanium Personal Builder"
+git config user.email "titanium-personal-builder@users.noreply.github.com"
 git fetch --depth 1 origin "refs/tags/$VERSION:refs/tags/$VERSION"
 git checkout --detach --force "refs/tags/$VERSION"
 cp "$SCRIPT_DIR/.gclient" "$CHROMIUM_DIR/.gclient"
