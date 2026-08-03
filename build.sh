@@ -13,6 +13,8 @@ ARTIFACT_DIR="$SCRIPT_DIR/artifacts"
 EXPECTED_VANADIUM_COMMIT="13c840a88df07096553710c9459b3e2ecd278235"
 
 export VERSION CHROMIUM_SOURCE DEBIAN_FRONTEND=noninteractive
+export GIT_COMMITTER_NAME="Titanium Personal Builder"
+export GIT_COMMITTER_EMAIL="titanium-personal-builder@users.noreply.github.com"
 
 if [[ -z "$VERSION" ]]; then
     echo "Unable to determine Chromium version from vanadium/args.gn" >&2
@@ -24,6 +26,11 @@ if [[ "$actual_vanadium_commit" != "$EXPECTED_VANADIUM_COMMIT" ]]; then
     echo "Vanadium commit mismatch: expected $EXPECTED_VANADIUM_COMMIT, got $actual_vanadium_commit" >&2
     exit 1
 fi
+
+# gclient hooks apply patches inside independent Git subprojects (for example
+# V8), so the ephemeral runner needs a non-secret committer identity globally.
+git config --global user.name "$GIT_COMMITTER_NAME"
+git config --global user.email "$GIT_COMMITTER_EMAIL"
 
 sudo dpkg --add-architecture i386
 sudo apt-get update
