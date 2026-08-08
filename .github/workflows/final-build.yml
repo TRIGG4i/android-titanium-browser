@@ -7,6 +7,7 @@ on:
       - work/final-browser
 
 permissions:
+  actions: write
   contents: read
 
 concurrency:
@@ -14,105 +15,87 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build-arm64:
-    name: Chromium ARM64 APK
-    runs-on: ubuntu-latest
-    timeout-minutes: 355
+  stage-1:
+    uses: ./.github/workflows/source-build-stage.yml
+    with:
+      stage: 1
+    secrets: inherit
 
+  stage-2:
+    needs: stage-1
+    if: needs.stage-1.result == 'success' && needs.stage-1.outputs.complete != 'true'
+    uses: ./.github/workflows/source-build-stage.yml
+    with:
+      stage: 2
+    secrets: inherit
+
+  stage-3:
+    needs: [stage-1, stage-2]
+    if: >-
+      always() &&
+      needs.stage-1.result == 'success' &&
+      needs.stage-1.outputs.complete != 'true' &&
+      needs.stage-2.result == 'success' &&
+      needs.stage-2.outputs.complete != 'true'
+    uses: ./.github/workflows/source-build-stage.yml
+    with:
+      stage: 3
+    secrets: inherit
+
+  stage-4:
+    needs: [stage-1, stage-2, stage-3]
+    if: >-
+      always() &&
+      needs.stage-1.result == 'success' &&
+      needs.stage-1.outputs.complete != 'true' &&
+      needs.stage-2.result == 'success' &&
+      needs.stage-2.outputs.complete != 'true' &&
+      needs.stage-3.result == 'success' &&
+      needs.stage-3.outputs.complete != 'true'
+    uses: ./.github/workflows/source-build-stage.yml
+    with:
+      stage: 4
+    secrets: inherit
+
+  stage-5:
+    needs: [stage-1, stage-2, stage-3, stage-4]
+    if: >-
+      always() &&
+      needs.stage-1.result == 'success' &&
+      needs.stage-1.outputs.complete != 'true' &&
+      needs.stage-2.result == 'success' &&
+      needs.stage-2.outputs.complete != 'true' &&
+      needs.stage-3.result == 'success' &&
+      needs.stage-3.outputs.complete != 'true' &&
+      needs.stage-4.result == 'success' &&
+      needs.stage-4.outputs.complete != 'true'
+    uses: ./.github/workflows/source-build-stage.yml
+    with:
+      stage: 5
+    secrets: inherit
+
+  require-final-apk:
+    name: Require a validated final APK
+    if: always()
+    needs: [stage-1, stage-2, stage-3, stage-4, stage-5]
+    runs-on: ubuntu-24.04
     steps:
-      - name: Checkout pinned sources
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-          submodules: recursive
-
-      - name: Record runner resources
+      - name: Confirm one source-build stage completed
+        env:
+          STAGE_1_COMPLETE: ${{ needs.stage-1.outputs.complete }}
+          STAGE_2_COMPLETE: ${{ needs.stage-2.outputs.complete }}
+          STAGE_3_COMPLETE: ${{ needs.stage-3.outputs.complete }}
+          STAGE_4_COMPLETE: ${{ needs.stage-4.outputs.complete }}
+          STAGE_5_COMPLETE: ${{ needs.stage-5.outputs.complete }}
         run: |
-          set -euxo pipefail
-          uname -a
-          nproc
-          free -h
-          df -h
-          git submodule status
-
-      - name: Reclaim safe runner space
-        run: |
-          set -euxo pipefail
-          for runner_path in \
-            /opt/hostedtoolcache/CodeQL \
-            /usr/share/dotnet \
-            /opt/ghc \
-            /usr/local/share/boost \
-            /usr/local/lib/android
-          do
-            if [[ -e "$runner_path" ]]; then
-              sudo rm -rf -- "$runner_path"
-            fi
-          done
-          sudo docker system prune --all --force --volumes
-          sudo apt-get clean
-          df -h
-
-      - name: Build Chromium public APK for ARM64
-        run: |
-          set -o pipefail
-          chmod +x build.sh common.sh patch.sh res/icon.sh
-          ./build.sh 2>&1 | tee source-build.log
-
-      - name: Validate source APK
-        run: |
-          set -euxo pipefail
-          apk='artifacts/Titanium-Browser-Personal-source-arm64-v8a.apk'
-          test -s "$apk"
-          file "$apk" | tee artifacts/file-report.txt
-          unzip -tq "$apk"
-
-          mapfile -t abi_dirs < <(zipinfo -1 "$apk" | sed -n 's#^lib/\([^/]*\)/.*#\1#p' | sort -u)
-          printf '%s\n' "${abi_dirs[@]}" | tee artifacts/abis.txt
-          [[ "${#abi_dirs[@]}" -eq 1 && "${abi_dirs[0]}" == 'arm64-v8a' ]]
-
-          aapt2="$(find chromium/src/third_party/android_sdk/public/build-tools -type f -name aapt2 | sort -V | tail -n 1)"
-          test -x "$aapt2"
-          "$aapt2" dump badging "$apk" | tee artifacts/aapt-badging.txt
-
-          apksigner="$(find chromium/src/third_party/android_sdk/public/build-tools -type f -name apksigner | sort -V | tail -n 1)"
-          test -x "$apksigner"
-          if "$apksigner" verify --verbose --print-certs "$apk" > artifacts/source-signature.txt 2>&1; then
-            echo 'source_signature=present' | tee artifacts/source-signature-state.txt
-          else
-            echo 'source_signature=absent_or_nonrelease' | tee artifacts/source-signature-state.txt
+          set -euo pipefail
+          if [[ "$STAGE_1_COMPLETE" == true ||
+                "$STAGE_2_COMPLETE" == true ||
+                "$STAGE_3_COMPLETE" == true ||
+                "$STAGE_4_COMPLETE" == true ||
+                "$STAGE_5_COMPLETE" == true ]]; then
+            echo 'A source-build stage produced and validated the final APK.'
+            exit 0
           fi
-
-          sha256sum "$apk" | tee artifacts/SOURCE_SHA256SUMS.txt
-          du -h "$apk" | tee artifacts/size.txt
-
-      - name: Capture diagnostics
-        if: always()
-        run: |
-          mkdir -p diagnostics
-          if [[ -f source-build.log ]]; then
-            cp source-build.log diagnostics/source-build.log
-          fi
-          df -h > diagnostics/disk-final.txt
-          free -h > diagnostics/memory-final.txt
-          git rev-parse HEAD > diagnostics/repository-commit.txt
-          git -C vanadium rev-parse HEAD > diagnostics/vanadium-commit.txt
-
-      - name: Upload source APK
-        if: success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: titanium-personal-source-arm64-${{ github.sha }}
-          path: artifacts/
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 7
-
-      - name: Upload diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: titanium-personal-build-diagnostics-${{ github.sha }}
-          path: diagnostics/
-          if-no-files-found: error
-          retention-days: 7
+          echo 'No source-build stage produced a final APK.' >&2
+          exit 1

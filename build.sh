@@ -11,6 +11,7 @@ SOURCE_DIR="$CHROMIUM_DIR/src"
 PATCH_WORK_DIR="$CHROMIUM_DIR/vanadium-patches"
 ARTIFACT_DIR="$SCRIPT_DIR/artifacts"
 EXPECTED_VANADIUM_COMMIT="13c840a88df07096553710c9459b3e2ecd278235"
+BUILD_SLICE_SECONDS="${BUILD_SLICE_SECONDS:-15600}"
 
 export VERSION CHROMIUM_SOURCE DEBIAN_FRONTEND=noninteractive
 export GIT_COMMITTER_NAME="Titanium Personal Builder"
@@ -89,10 +90,33 @@ gclient runhooks
 source "$SCRIPT_DIR/patch.sh"
 mkdir -p out/Default
 cp "$SCRIPT_DIR/args.gn" out/Default/args.gn
+
+# Git checkouts receive fresh mtimes on every hosted runner.  A resumed Ninja
+# output cache would otherwise look older than every source file and rebuild
+# from zero.  Normalize source/input mtimes while deliberately leaving the
+# cached output tree untouched.  Content hashes and GN inputs remain pinned.
+find . -path './out' -prune -o -type f -exec touch -h -d '@946684800' {} +
+
 gn gen out/Default
 
-# The final source build intentionally produces one target and one ABI only.
-autoninja -C out/Default chrome_public_apk
+# A clean Chromium build is longer than GitHub's six-hour hosted-job limit.
+# Stop cleanly before that hard limit so Actions can persist out/Default, then
+# resume the same Ninja graph in the next hosted job.
+set +e
+timeout --foreground --signal=INT --kill-after=120s \
+    "${BUILD_SLICE_SECONDS}s" autoninja -C out/Default chrome_public_apk
+compile_rc=$?
+set -e
+
+if [[ "$compile_rc" -ne 0 ]]; then
+    if [[ "$compile_rc" -eq 124 || "$compile_rc" -eq 130 || "$compile_rc" -eq 143 ]]; then
+        echo "Chromium build slice completed; out/Default is ready to resume"
+        sync
+        exit 75
+    fi
+    echo "Chromium build failed with exit code $compile_rc" >&2
+    exit "$compile_rc"
+fi
 
 mapfile -t apk_candidates < <(find out/Default/apks -maxdepth 1 -type f -name 'ChromePublic*.apk' -print)
 if [[ "${#apk_candidates[@]}" -ne 1 ]]; then
