@@ -159,7 +159,14 @@ jobs:
           "$aapt2" dump badging "$final_apk" | tee artifacts/aapt-badging.txt
           "$apksigner" verify --verbose --print-certs "$final_apk" \
             | tee artifacts/apksigner-verification.txt
-          sha256sum "$final_apk" | tee artifacts/SHA256SUMS.txt
+          grep -F \
+            'certificate SHA-256 digest: 74a5f0e71a63d20aba6995142b0e77bc7c03088c162deccf312bc22195c2c066' \
+            artifacts/apksigner-verification.txt
+          (
+            cd artifacts
+            sha256sum Titanium-Browser-Personal-final-arm64-v8a.apk \
+              | tee SHA256SUMS.txt
+          )
           stat --printf='%n %s bytes\n' "$final_apk" | tee artifacts/size.txt
 
           cp INSTALLATION.md artifacts/
@@ -229,7 +236,7 @@ jobs:
             echo "::warning::Unable to delete superseded cache $RESTORED_KEY"
           fi
 
-      - name: Upload final APK and fallback ZIP
+      - name: Upload final APK and delivery ZIP
         if: steps.compile.outputs.complete == 'true'
         uses: actions/upload-artifact@v4
         with:
