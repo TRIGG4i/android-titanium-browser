@@ -2,6 +2,32 @@ name: ARM64 APK install smoke test
 
 on:
   workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: Run containing the signed APK artifact
+        required: false
+        default: '31257603213'
+        type: string
+      artifact_name:
+        description: Exact artifact name to download
+        required: false
+        default: titanium-browser-personal-upstream-contingency-3ee09afd0946c4d8a579138b7c801f050a338c8f
+        type: string
+      apk_filename:
+        description: APK filename inside the artifact
+        required: false
+        default: Titanium-Browser-Personal-upstream-contingency-arm64-v8a.apk
+        type: string
+      package_name:
+        description: Expected Android package
+        required: false
+        default: io.github.jqssun.helium
+        type: string
+      expected_sha256:
+        description: Expected APK SHA-256
+        required: false
+        default: d8073562ba9b567370872bb985d6728ee4860116b80edc0f5662c099a7697da5
+        type: string
 
 permissions:
   actions: read
@@ -16,6 +42,12 @@ jobs:
     name: Install and launch ARM64 APK on Android 16
     runs-on: ubuntu-24.04
     timeout-minutes: 120
+    env:
+      TEST_SOURCE_RUN_ID: ${{ inputs.source_run_id || '31257603213' }}
+      TEST_ARTIFACT_NAME: ${{ inputs.artifact_name || 'titanium-browser-personal-upstream-contingency-3ee09afd0946c4d8a579138b7c801f050a338c8f' }}
+      TEST_APK_FILENAME: ${{ inputs.apk_filename || 'Titanium-Browser-Personal-upstream-contingency-arm64-v8a.apk' }}
+      TEST_PACKAGE: ${{ inputs.package_name || 'io.github.jqssun.helium' }}
+      TEST_EXPECTED_SHA256: ${{ inputs.expected_sha256 || 'd8073562ba9b567370872bb985d6728ee4860116b80edc0f5662c099a7697da5' }}
 
     steps:
       - name: Checkout validation instructions
@@ -29,13 +61,14 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p downloaded diagnostics
-          gh run download 31257603213 \
+          gh run download "$TEST_SOURCE_RUN_ID" \
             --repo "$GITHUB_REPOSITORY" \
-            --name titanium-browser-personal-upstream-contingency-3ee09afd0946c4d8a579138b7c801f050a338c8f \
+            --name "$TEST_ARTIFACT_NAME" \
             --dir downloaded
-          test -s downloaded/Titanium-Browser-Personal-upstream-contingency-arm64-v8a.apk
-          actual_sha="$(shasum -a 256 downloaded/Titanium-Browser-Personal-upstream-contingency-arm64-v8a.apk | awk '{print $1}')"
-          [[ "$actual_sha" == 'd8073562ba9b567370872bb985d6728ee4860116b80edc0f5662c099a7697da5' ]]
+          test -s "downloaded/$TEST_APK_FILENAME"
+          actual_sha="$(sha256sum "downloaded/$TEST_APK_FILENAME" | awk '{print $1}')"
+          [[ "$actual_sha" == "$TEST_EXPECTED_SHA256" ]]
+          cp "downloaded/$TEST_APK_FILENAME" downloaded/test.apk
 
       - name: Set up Java for Android SDK tools
         uses: actions/setup-java@v5
@@ -134,8 +167,8 @@ jobs:
       - name: Install and launch signed APK
         run: |
           set -euo pipefail
-          apk='downloaded/Titanium-Browser-Personal-upstream-contingency-arm64-v8a.apk'
-          package='io.github.jqssun.helium'
+          apk='downloaded/test.apk'
+          package="$TEST_PACKAGE"
           adb logcat -c
           adb install --no-streaming "$apk" | tee diagnostics/adb-install.txt
           adb shell pm path "$package" | tee diagnostics/package-path.txt
@@ -148,8 +181,28 @@ jobs:
           adb shell pidof "$package" | tee diagnostics/process-id.txt
           test -s diagnostics/process-id.txt
           adb exec-out screencap -p > diagnostics/first-launch.png
+          adb shell am start -W \
+            -a android.intent.action.VIEW \
+            -d 'https://example.com/' \
+            -p "$package" | tee diagnostics/https-navigation.txt
+          sleep 30
+          adb shell dumpsys activity activities \
+            | grep -F "$package" \
+            | head -n 40 \
+            | tee diagnostics/active-browser.txt
+          adb exec-out screencap -p > diagnostics/https-navigation.png
+          adb shell settings put system accelerometer_rotation 0
+          adb shell settings put system user_rotation 1
+          sleep 15
+          adb exec-out screencap -p > diagnostics/landscape.png
+          adb shell am force-stop "$package"
+          adb shell monkey -p "$package" -c android.intent.category.LAUNCHER 1 \
+            | tee diagnostics/relaunch.txt
+          sleep 20
+          adb shell pidof "$package" | tee diagnostics/relaunch-process-id.txt
+          test -s diagnostics/relaunch-process-id.txt
           adb logcat -d -v threadtime > diagnostics/logcat.txt
-          if grep -En 'FATAL EXCEPTION.*io.github.jqssun.helium|Process: io.github.jqssun.helium.*FATAL EXCEPTION' diagnostics/logcat.txt; then
+          if grep -En "FATAL EXCEPTION.*${package}|Process: ${package}.*FATAL EXCEPTION" diagnostics/logcat.txt; then
             echo 'Fatal application exception detected after launch' >&2
             exit 1
           fi
