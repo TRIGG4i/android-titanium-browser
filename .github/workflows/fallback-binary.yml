@@ -2,9 +2,6 @@ name: Verified upstream ARM64 contingency
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - work/final-browser
 
 permissions:
   contents: read
@@ -48,7 +45,7 @@ jobs:
           gh attestation verify \
             artifacts/151.0.7922.71-1785665275-arm64-v8a.apk \
             --repo jqssun/android-titanium-browser \
-            | tee artifacts/upstream-attestation.txt
+            2>&1 | tee artifacts/upstream-attestation.txt
 
       - name: Sign and validate contingency APK
         env:
