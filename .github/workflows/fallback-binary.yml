@@ -1,0 +1,150 @@
+name: Verified upstream ARM64 contingency
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: titanium-personal-upstream-contingency
+  cancel-in-progress: false
+
+jobs:
+  prepare-contingency:
+    name: Verify and personally sign upstream ARM64 APK
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout delivery documents
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Download pinned upstream ARM64 release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          gh release download v151.0.7922.71 \
+            --repo jqssun/android-titanium-browser \
+            --pattern '151.0.7922.71-1785665275-arm64-v8a.apk' \
+            --dir artifacts
+          printf '%s  %s\n' \
+            '6778f892ef2657f3930c1aa792cd8d487f86d7c52dcf1bd85e44226719d15a58' \
+            'artifacts/151.0.7922.71-1785665275-arm64-v8a.apk' \
+            | sha256sum --check --strict
+
+      - name: Verify upstream build provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh attestation verify \
+            artifacts/151.0.7922.71-1785665275-arm64-v8a.apk \
+            --repo jqssun/android-titanium-browser \
+            | tee artifacts/upstream-attestation.txt
+
+      - name: Sign and validate contingency APK
+        env:
+          RELEASE_KEYSTORE_B64: ${{ secrets.TITANIUM_RELEASE_KEYSTORE_B64 }}
+          RELEASE_KEY_ALIAS: ${{ secrets.TITANIUM_RELEASE_KEY_ALIAS }}
+          RELEASE_STORE_PASSWORD: ${{ secrets.TITANIUM_RELEASE_STORE_PASSWORD }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.TITANIUM_RELEASE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          source_apk='artifacts/151.0.7922.71-1785665275-arm64-v8a.apk'
+          final_apk='artifacts/Titanium-Browser-Personal-upstream-contingency-arm64-v8a.apk'
+          keystore="$RUNNER_TEMP/titanium-personal-release.p12"
+
+          test -s "$source_apk"
+          test -n "$RELEASE_KEYSTORE_B64"
+          test -n "$RELEASE_KEY_ALIAS"
+          test -n "$RELEASE_STORE_PASSWORD"
+          test -n "$RELEASE_KEY_PASSWORD"
+          printf '%s' "$RELEASE_KEYSTORE_B64" | base64 --decode > "$keystore"
+          chmod 600 "$keystore"
+
+          build_tools="$ANDROID_HOME/build-tools"
+          aapt2="$(find "$build_tools" -type f -name aapt2 | sort -V | tail -n 1)"
+          apksigner="$(find "$build_tools" -type f -name apksigner | sort -V | tail -n 1)"
+          zipalign="$(find "$build_tools" -type f -name zipalign | sort -V | tail -n 1)"
+          test -x "$aapt2"
+          test -x "$apksigner"
+          test -x "$zipalign"
+
+          "$zipalign" -c -P 16 4 "$source_apk"
+          "$apksigner" sign \
+            --ks "$keystore" \
+            --ks-key-alias "$RELEASE_KEY_ALIAS" \
+            --ks-pass env:RELEASE_STORE_PASSWORD \
+            --key-pass env:RELEASE_KEY_PASSWORD \
+            --out "$final_apk" \
+            "$source_apk"
+          rm -f "$keystore"
+
+          test -s "$final_apk"
+          unzip -tq "$final_apk"
+          "$zipalign" -c -P 16 4 "$final_apk" | tee artifacts/zipalign-report.txt
+          mapfile -t abi_dirs < <(zipinfo -1 "$final_apk" | sed -n 's#^lib/\([^/]*\)/.*#\1#p' | sort -u)
+          printf '%s\n' "${abi_dirs[@]}" | tee artifacts/abis.txt
+          [[ "${#abi_dirs[@]}" -eq 1 && "${abi_dirs[0]}" == 'arm64-v8a' ]]
+          "$aapt2" dump badging "$final_apk" | tee artifacts/aapt-badging.txt
+          "$apksigner" verify --verbose --print-certs "$final_apk" \
+            | tee artifacts/apksigner-verification.txt
+          sha256sum "$final_apk" | tee artifacts/SHA256SUMS-contingency.txt
+          stat --printf='%n %s bytes\n' "$final_apk" | tee artifacts/size.txt
+
+      - name: Document contingency provenance
+        run: |
+          set -euo pipefail
+          cat > artifacts/CONTINGENCY_BUILD_REPORT.txt <<'EOF'
+          This is a verified contingency binary, not the customized source build.
+          Upstream project: jqssun/android-titanium-browser
+          Upstream release: v151.0.7922.71
+          Upstream asset: 151.0.7922.71-1785665275-arm64-v8a.apk
+          Upstream SHA-256: 6778f892ef2657f3930c1aa792cd8d487f86d7c52dcf1bd85e44226719d15a58
+          Architecture: arm64-v8a
+          Personal signing: applied and verified by this workflow
+          Limitation: upstream package/name and only upstream-compiled features are present
+          EOF
+          cp INSTALLATION.md artifacts/
+          cp FINAL_KNOWN_LIMITATIONS.md artifacts/
+          cp LICENSES_AND_CREDITS.md artifacts/
+          cp LICENSE artifacts/LICENSE
+          (
+            cd artifacts
+            zip -9 Titanium-Browser-Personal-upstream-contingency.zip \
+              Titanium-Browser-Personal-upstream-contingency-arm64-v8a.apk \
+              SHA256SUMS-contingency.txt \
+              CONTINGENCY_BUILD_REPORT.txt \
+              upstream-attestation.txt \
+              apksigner-verification.txt \
+              aapt-badging.txt \
+              abis.txt \
+              INSTALLATION.md \
+              FINAL_KNOWN_LIMITATIONS.md \
+              LICENSES_AND_CREDITS.md \
+              LICENSE
+          )
+
+      - name: Upload verified contingency APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: titanium-browser-personal-upstream-contingency-${{ github.sha }}
+          path: |
+            artifacts/Titanium-Browser-Personal-upstream-contingency-arm64-v8a.apk
+            artifacts/Titanium-Browser-Personal-upstream-contingency.zip
+            artifacts/SHA256SUMS-contingency.txt
+            artifacts/CONTINGENCY_BUILD_REPORT.txt
+            artifacts/upstream-attestation.txt
+            artifacts/apksigner-verification.txt
+            artifacts/aapt-badging.txt
+            artifacts/abis.txt
+            artifacts/size.txt
+            artifacts/zipalign-report.txt
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
