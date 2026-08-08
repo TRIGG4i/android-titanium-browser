@@ -17,7 +17,7 @@ concurrency:
 jobs:
   install-smoke:
     name: Install and launch on Android ARM64 emulator
-    runs-on: ubuntu-24.04
+    runs-on: macos-15
     timeout-minutes: 120
 
     steps:
@@ -37,10 +37,8 @@ jobs:
             --name titanium-browser-personal-upstream-contingency-3ee09afd0946c4d8a579138b7c801f050a338c8f \
             --dir downloaded
           test -s downloaded/Titanium-Browser-Personal-upstream-contingency-arm64-v8a.apk
-          printf '%s  %s\n' \
-            'd8073562ba9b567370872bb985d6728ee4860116b80edc0f5662c099a7697da5' \
-            'downloaded/Titanium-Browser-Personal-upstream-contingency-arm64-v8a.apk' \
-            | sha256sum --check --strict
+          actual_sha="$(shasum -a 256 downloaded/Titanium-Browser-Personal-upstream-contingency-arm64-v8a.apk | awk '{print $1}')"
+          [[ "$actual_sha" == 'd8073562ba9b567370872bb985d6728ee4860116b80edc0f5662c099a7697da5' ]]
 
       - name: Set up Java for Android SDK tools
         uses: actions/setup-java@v5
@@ -55,10 +53,9 @@ jobs:
           tools_zip="$RUNNER_TEMP/android-command-line-tools.zip"
           curl --fail --location --retry 3 \
             --output "$tools_zip" \
-            'https://dl.google.com/android/repository/commandlinetools-linux-15859902_latest.zip'
-          printf '%s  %s\n' \
-            '4e4c464f145a7512b57d088ac6c278c03c9eea610886b35a5e0804e74eedf583' \
-            "$tools_zip" | sha256sum --check --strict
+            'https://dl.google.com/android/repository/commandlinetools-mac_arm64-15859902_latest.zip'
+          actual_sha="$(shasum -a 256 "$tools_zip" | awk '{print $1}')"
+          [[ "$actual_sha" == '835b62a26162b229b441d1f6d4680383815a270809eb33522c0d480fa5002c4e' ]]
           mkdir -p "$sdk_root/cmdline-tools" "$RUNNER_TEMP/android-tools-unpack"
           unzip -q "$tools_zip" -d "$RUNNER_TEMP/android-tools-unpack"
           mv "$RUNNER_TEMP/android-tools-unpack/cmdline-tools" \
@@ -91,12 +88,17 @@ jobs:
             --package 'system-images;android-36;google_apis;arm64-v8a' \
             --device pixel_6
 
-      - name: Boot ARM64 emulator without hardware acceleration
+      - name: Boot Android emulator on ARM64 host
         env:
           ANDROID_AVD_HOME: ${{ runner.temp }}/avd
         run: |
           set -euo pipefail
+          [[ "$(uname -m)" == arm64 ]]
           adb start-server
+          accel_args=()
+          if ! emulator -accel-check > diagnostics/emulator-acceleration.txt 2>&1; then
+            accel_args=(-accel off)
+          fi
           emulator @titanium-arm64-api36 \
             -no-window \
             -no-audio \
@@ -104,16 +106,26 @@ jobs:
             -no-snapshot \
             -no-metrics \
             -gpu swiftshader_indirect \
-            -accel off \
             -memory 4096 \
+            "${accel_args[@]}" \
             > diagnostics/emulator.log 2>&1 &
           echo "$!" > diagnostics/emulator.pid
-          adb wait-for-device
-          timeout 2400 bash -c '
-            until [[ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d "\r")" == 1 ]]; do
-              sleep 10
-            done
-          '
+          device_deadline=$((SECONDS + 900))
+          until [[ "$(adb get-state 2>/dev/null || true)" == device ]]; do
+            if (( SECONDS >= device_deadline )); then
+              echo 'Timed out waiting for the ARM64 emulator device' >&2
+              exit 1
+            fi
+            sleep 10
+          done
+          boot_deadline=$((SECONDS + 2400))
+          until [[ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" == 1 ]]; do
+            if (( SECONDS >= boot_deadline )); then
+              echo 'Timed out waiting for Android boot completion' >&2
+              exit 1
+            fi
+            sleep 10
+          done
           adb shell getprop | tee diagnostics/device-properties.txt
           adb shell input keyevent 82
 
@@ -135,7 +147,7 @@ jobs:
           test -s diagnostics/process-id.txt
           adb exec-out screencap -p > diagnostics/first-launch.png
           adb logcat -d -v threadtime > diagnostics/logcat.txt
-          if rg -n 'FATAL EXCEPTION.*io.github.jqssun.helium|Process: io.github.jqssun.helium.*FATAL EXCEPTION' diagnostics/logcat.txt; then
+          if grep -En 'FATAL EXCEPTION.*io.github.jqssun.helium|Process: io.github.jqssun.helium.*FATAL EXCEPTION' diagnostics/logcat.txt; then
             echo 'Fatal application exception detected after launch' >&2
             exit 1
           fi
