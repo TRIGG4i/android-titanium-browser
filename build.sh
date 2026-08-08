@@ -103,13 +103,18 @@ gn gen out/Default
 # Stop cleanly before that hard limit so Actions can persist out/Default, then
 # resume the same Ninja graph in the next hosted job.
 set +e
-timeout --foreground --signal=INT --kill-after=120s \
+# Do not use timeout's --foreground mode here. autoninja launches Siso as a
+# child process; foreground mode only signalled the wrapper and let Siso keep
+# the Actions step alive until GitHub's hard job timeout. The default process
+# group mode interrupts the complete compiler tree and leaves time to cache it.
+timeout --signal=INT --kill-after=120s \
     "${BUILD_SLICE_SECONDS}s" autoninja -C out/Default chrome_public_apk
 compile_rc=$?
 set -e
 
 if [[ "$compile_rc" -ne 0 ]]; then
-    if [[ "$compile_rc" -eq 124 || "$compile_rc" -eq 130 || "$compile_rc" -eq 143 ]]; then
+    if [[ "$compile_rc" -eq 124 || "$compile_rc" -eq 130 ||
+          "$compile_rc" -eq 137 || "$compile_rc" -eq 143 ]]; then
         echo "Chromium build slice completed; out/Default is ready to resume"
         sync
         exit 75

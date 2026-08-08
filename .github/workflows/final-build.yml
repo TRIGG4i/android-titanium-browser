@@ -2,6 +2,9 @@ name: Final ARM64 source build
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - work/final-browser
 
 permissions:
   actions: write
