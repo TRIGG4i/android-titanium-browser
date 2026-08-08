@@ -42,12 +42,44 @@ jobs:
             'downloaded/Titanium-Browser-Personal-upstream-contingency-arm64-v8a.apk' \
             | sha256sum --check --strict
 
+      - name: Set up Java for Android SDK tools
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Install pinned Android SDK command-line tools
+        run: |
+          set -euo pipefail
+          sdk_root="$RUNNER_TEMP/android-sdk"
+          tools_zip="$RUNNER_TEMP/android-command-line-tools.zip"
+          curl --fail --location --retry 3 \
+            --output "$tools_zip" \
+            'https://dl.google.com/android/repository/commandlinetools-linux-15859902_latest.zip'
+          printf '%s  %s\n' \
+            '4e4c464f145a7512b57d088ac6c278c03c9eea610886b35a5e0804e74eedf583' \
+            "$tools_zip" | sha256sum --check --strict
+          mkdir -p "$sdk_root/cmdline-tools" "$RUNNER_TEMP/android-tools-unpack"
+          unzip -q "$tools_zip" -d "$RUNNER_TEMP/android-tools-unpack"
+          mv "$RUNNER_TEMP/android-tools-unpack/cmdline-tools" \
+            "$sdk_root/cmdline-tools/latest"
+          echo "ANDROID_HOME=$sdk_root" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$sdk_root" >> "$GITHUB_ENV"
+          echo "$sdk_root/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          echo "$sdk_root/platform-tools" >> "$GITHUB_PATH"
+          echo "$sdk_root/emulator" >> "$GITHUB_PATH"
+
       - name: Install Android 16 ARM64 emulator image
         env:
           ANDROID_AVD_HOME: ${{ runner.temp }}/avd
         run: |
           set -euo pipefail
           mkdir -p "$ANDROID_AVD_HOME"
+          set +o pipefail
+          yes | sdkmanager --licenses > diagnostics/sdk-licenses.log
+          license_rc="${PIPESTATUS[1]}"
+          set -o pipefail
+          [[ "$license_rc" -eq 0 ]]
           sdkmanager --install \
             'platform-tools' \
             'emulator' \
