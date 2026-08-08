@@ -2,6 +2,9 @@ name: ARM64 APK install smoke test
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - work/final-browser
 
 permissions:
   actions: read
@@ -13,8 +16,8 @@ concurrency:
 
 jobs:
   install-smoke:
-    name: Install and launch on Android ARM64 emulator
-    runs-on: macos-15
+    name: Install and launch ARM64 APK on Android 16
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
 
     steps:
@@ -50,9 +53,10 @@ jobs:
           tools_zip="$RUNNER_TEMP/android-command-line-tools.zip"
           curl --fail --location --retry 3 \
             --output "$tools_zip" \
-            'https://dl.google.com/android/repository/commandlinetools-mac_arm64-15859902_latest.zip'
-          actual_sha="$(shasum -a 256 "$tools_zip" | awk '{print $1}')"
-          [[ "$actual_sha" == '835b62a26162b229b441d1f6d4680383815a270809eb33522c0d480fa5002c4e' ]]
+            'https://dl.google.com/android/repository/commandlinetools-linux-15859902_latest.zip'
+          printf '%s  %s\n' \
+            '4e4c464f145a7512b57d088ac6c278c03c9eea610886b35a5e0804e74eedf583' \
+            "$tools_zip" | sha256sum --check --strict
           mkdir -p "$sdk_root/cmdline-tools" "$RUNNER_TEMP/android-tools-unpack"
           unzip -q "$tools_zip" -d "$RUNNER_TEMP/android-tools-unpack"
           mv "$RUNNER_TEMP/android-tools-unpack/cmdline-tools" \
@@ -63,7 +67,7 @@ jobs:
           echo "$sdk_root/platform-tools" >> "$GITHUB_PATH"
           echo "$sdk_root/emulator" >> "$GITHUB_PATH"
 
-      - name: Install Android 16 ARM64 emulator image
+      - name: Install Android 16 Google APIs emulator image
         env:
           ANDROID_AVD_HOME: ${{ runner.temp }}/avd
         run: |
@@ -77,26 +81,24 @@ jobs:
           sdkmanager --install \
             'platform-tools' \
             'emulator' \
-            'system-images;android-36;google_apis;arm64-v8a' \
+            'system-images;android-36;google_apis;x86_64' \
             | tee diagnostics/sdk-install.log
           printf 'no\n' | avdmanager create avd \
             --force \
-            --name titanium-arm64-api36 \
-            --package 'system-images;android-36;google_apis;arm64-v8a' \
+            --name titanium-api36 \
+            --package 'system-images;android-36;google_apis;x86_64' \
             --device pixel_6
 
-      - name: Boot Android emulator on ARM64 host
+      - name: Boot Android 16 emulator with KVM
         env:
           ANDROID_AVD_HOME: ${{ runner.temp }}/avd
         run: |
           set -euo pipefail
-          [[ "$(uname -m)" == arm64 ]]
+          test -e /dev/kvm
+          sudo chmod 666 /dev/kvm
           adb start-server
-          accel_args=()
-          if ! emulator -accel-check > diagnostics/emulator-acceleration.txt 2>&1; then
-            accel_args=(-accel off)
-          fi
-          emulator @titanium-arm64-api36 \
+          emulator -accel-check | tee diagnostics/emulator-acceleration.txt
+          emulator @titanium-api36 \
             -no-window \
             -no-audio \
             -no-boot-anim \
@@ -104,9 +106,11 @@ jobs:
             -no-metrics \
             -gpu swiftshader_indirect \
             -memory 4096 \
-            "${accel_args[@]}" \
             > diagnostics/emulator.log 2>&1 &
           echo "$!" > diagnostics/emulator.pid
+          sleep 10
+          ps -ef | grep -E '[e]mulator|[q]emu' > diagnostics/emulator-processes.txt
+          adb devices -l | tee diagnostics/adb-devices-initial.txt
           device_deadline=$((SECONDS + 900))
           until [[ "$(adb get-state 2>/dev/null || true)" == device ]]; do
             if (( SECONDS >= device_deadline )); then
@@ -124,6 +128,10 @@ jobs:
             sleep 10
           done
           adb shell getprop | tee diagnostics/device-properties.txt
+          adb shell getprop ro.product.cpu.abilist \
+            | tee diagnostics/device-abi-list.txt
+          adb shell getprop ro.dalvik.vm.native.bridge \
+            | tee diagnostics/native-bridge.txt
           adb shell input keyevent 82
 
       - name: Install and launch signed APK
