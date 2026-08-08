@@ -2,9 +2,6 @@ name: ARM64 APK install smoke test
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - work/final-browser
 
 permissions:
   actions: read
