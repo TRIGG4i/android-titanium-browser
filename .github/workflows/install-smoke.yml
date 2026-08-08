@@ -1,0 +1,123 @@
+name: ARM64 APK install smoke test
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - work/final-browser
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: titanium-personal-arm64-install-smoke
+  cancel-in-progress: false
+
+jobs:
+  install-smoke:
+    name: Install and launch on Android ARM64 emulator
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout validation instructions
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Download signed ARM64 contingency APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p downloaded diagnostics
+          gh run download 31257603213 \
+            --repo "$GITHUB_REPOSITORY" \
+            --name titanium-browser-personal-upstream-contingency-3ee09afd0946c4d8a579138b7c801f050a338c8f \
+            --dir downloaded
+          test -s downloaded/Titanium-Browser-Personal-upstream-contingency-arm64-v8a.apk
+          printf '%s  %s\n' \
+            'd8073562ba9b567370872bb985d6728ee4860116b80edc0f5662c099a7697da5' \
+            'downloaded/Titanium-Browser-Personal-upstream-contingency-arm64-v8a.apk' \
+            | sha256sum --check --strict
+
+      - name: Install Android 16 ARM64 emulator image
+        env:
+          ANDROID_AVD_HOME: ${{ runner.temp }}/avd
+        run: |
+          set -euo pipefail
+          mkdir -p "$ANDROID_AVD_HOME"
+          sdkmanager --install \
+            'platform-tools' \
+            'emulator' \
+            'system-images;android-36;google_apis;arm64-v8a' \
+            | tee diagnostics/sdk-install.log
+          printf 'no\n' | avdmanager create avd \
+            --force \
+            --name titanium-arm64-api36 \
+            --package 'system-images;android-36;google_apis;arm64-v8a' \
+            --device pixel_6
+
+      - name: Boot ARM64 emulator without hardware acceleration
+        env:
+          ANDROID_AVD_HOME: ${{ runner.temp }}/avd
+        run: |
+          set -euo pipefail
+          adb start-server
+          emulator @titanium-arm64-api36 \
+            -no-window \
+            -no-audio \
+            -no-boot-anim \
+            -no-snapshot \
+            -no-metrics \
+            -gpu swiftshader_indirect \
+            -accel off \
+            -memory 4096 \
+            > diagnostics/emulator.log 2>&1 &
+          echo "$!" > diagnostics/emulator.pid
+          adb wait-for-device
+          timeout 2400 bash -c '
+            until [[ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d "\r")" == 1 ]]; do
+              sleep 10
+            done
+          '
+          adb shell getprop | tee diagnostics/device-properties.txt
+          adb shell input keyevent 82
+
+      - name: Install and launch signed APK
+        run: |
+          set -euo pipefail
+          apk='downloaded/Titanium-Browser-Personal-upstream-contingency-arm64-v8a.apk'
+          package='io.github.jqssun.helium'
+          adb logcat -c
+          adb install --no-streaming "$apk" | tee diagnostics/adb-install.txt
+          adb shell pm path "$package" | tee diagnostics/package-path.txt
+          adb shell dumpsys package "$package" > diagnostics/package-dumpsys.txt
+          grep -E 'versionCode=|versionName=|primaryCpuAbi=' diagnostics/package-dumpsys.txt \
+            | head -n 20 | tee diagnostics/installed-version.txt
+          adb shell monkey -p "$package" -c android.intent.category.LAUNCHER 1 \
+            | tee diagnostics/launch.txt
+          sleep 45
+          adb shell pidof "$package" | tee diagnostics/process-id.txt
+          test -s diagnostics/process-id.txt
+          adb exec-out screencap -p > diagnostics/first-launch.png
+          adb logcat -d -v threadtime > diagnostics/logcat.txt
+          if rg -n 'FATAL EXCEPTION.*io.github.jqssun.helium|Process: io.github.jqssun.helium.*FATAL EXCEPTION' diagnostics/logcat.txt; then
+            echo 'Fatal application exception detected after launch' >&2
+            exit 1
+          fi
+
+      - name: Stop emulator
+        if: always()
+        run: |
+          adb emu kill || true
+
+      - name: Upload install evidence
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: titanium-arm64-install-smoke-${{ github.sha }}
+          path: diagnostics/
+          if-no-files-found: error
+          retention-days: 14
