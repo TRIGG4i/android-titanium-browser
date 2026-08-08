@@ -2,6 +2,9 @@ name: Verified upstream ARM64 contingency
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - work/final-browser
 
 permissions:
   contents: read
