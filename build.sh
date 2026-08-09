@@ -97,6 +97,15 @@ cp "$SCRIPT_DIR/args.gn" out/Default/args.gn
 # cached output tree untouched.  Content hashes and GN inputs remain pinned.
 find . -path './out' -prune -o -type f -exec touch -h -d '@946684800' {} +
 
+# A one-time cache migration may restore output produced before the personal
+# launcher label changed. Source mtimes are normalized above, so explicitly
+# make this content-bearing Android resource newer than any restored output.
+# Touching only this file keeps the completed native Chromium objects reusable
+# while forcing Ninja to regenerate the resource/package dependency chain.
+android_branding_input='chrome/android/java/res_titanium_base/values/channel_constants.xml'
+test -f "$android_branding_input"
+touch -h "$android_branding_input"
+
 gn gen out/Default
 
 # A clean Chromium build is longer than GitHub's six-hour hosted-job limit.

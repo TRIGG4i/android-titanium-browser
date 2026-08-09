@@ -7,6 +7,11 @@ on:
         description: Sequential source-build stage number
         required: true
         type: number
+      fallback_cache_identity:
+        description: Previous compatible build identity for one-time incremental migration
+        required: false
+        default: 70fe3cf66edda8db6be17e97d2e38fa2043151092f6c45905729c56acf5bf12b
+        type: string
     outputs:
       complete:
         description: Whether this stage produced and validated the final APK
@@ -87,6 +92,7 @@ jobs:
           key: titanium-chromium-out-${{ steps.build-key.outputs.key }}-probe
           restore-keys: |
             titanium-chromium-out-${{ steps.build-key.outputs.key }}-
+            titanium-chromium-out-${{ inputs.fallback_cache_identity }}-
 
       - name: Build Chromium public APK slice for ARM64
         id: compile
