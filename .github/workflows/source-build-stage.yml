@@ -1,0 +1,283 @@
+name: Chromium ARM64 resumable stage
+
+on:
+  workflow_call:
+    inputs:
+      stage:
+        description: Sequential source-build stage number
+        required: true
+        type: number
+      fallback_cache_identity:
+        description: Previous compatible build identity for one-time incremental migration
+        required: false
+        default: 70fe3cf66edda8db6be17e97d2e38fa2043151092f6c45905729c56acf5bf12b
+        type: string
+    outputs:
+      complete:
+        description: Whether this stage produced and validated the final APK
+        value: ${{ jobs.build-stage.outputs.complete }}
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  build-stage:
+    name: Chromium ARM64 stage ${{ inputs.stage }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    outputs:
+      complete: ${{ steps.compile.outputs.complete }}
+
+    steps:
+      - name: Checkout pinned sources
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          submodules: recursive
+
+      - name: Record runner resources
+        run: |
+          set -euxo pipefail
+          uname -a
+          nproc
+          free -h
+          df -h
+          git rev-parse HEAD
+          git submodule status --recursive
+
+      - name: Reclaim safe runner space
+        run: |
+          set -euxo pipefail
+          for runner_path in \
+            /opt/hostedtoolcache/CodeQL \
+            /usr/share/dotnet \
+            /opt/ghc \
+            /usr/local/share/boost \
+            /usr/local/lib/android
+          do
+            if [[ -e "$runner_path" ]]; then
+              sudo rm -rf -- "$runner_path"
+            fi
+          done
+          sudo docker system prune --all --force --volumes
+          sudo apt-get clean
+          df -h
+
+      - name: Derive content-addressed build cache key
+        id: build-key
+        run: |
+          set -euo pipefail
+          {
+            git hash-object \
+              args.gn \
+              build.sh \
+              common.sh \
+              patch.sh \
+              .gclient \
+              res/icon.sh \
+              res/icon.svg \
+              res/drawable/themed_app_icon.xml
+            git -C vanadium rev-parse HEAD
+          } > "$RUNNER_TEMP/titanium-build-inputs"
+          build_key="$(sha256sum "$RUNNER_TEMP/titanium-build-inputs" | cut -d' ' -f1)"
+          echo "key=$build_key" >> "$GITHUB_OUTPUT"
+          echo "Build cache identity: $build_key"
+
+      - name: Restore latest Chromium output checkpoint
+        id: restore
+        uses: actions/cache/restore@v4
+        with:
+          path: chromium/src/out/Default
+          key: titanium-chromium-out-${{ steps.build-key.outputs.key }}-probe
+          restore-keys: |
+            titanium-chromium-out-${{ steps.build-key.outputs.key }}-
+            titanium-chromium-out-${{ inputs.fallback_cache_identity }}-
+
+      - name: Build Chromium public APK slice for ARM64
+        id: compile
+        env:
+          BUILD_SLICE_SECONDS: '15600'
+        run: |
+          set -o pipefail
+          chmod +x build.sh common.sh patch.sh res/icon.sh
+          set +e
+          ./build.sh 2>&1 | tee source-build.log
+          build_rc="${PIPESTATUS[0]}"
+          set -e
+
+          if [[ "$build_rc" -eq 0 ]]; then
+            echo 'complete=true' >> "$GITHUB_OUTPUT"
+          elif [[ "$build_rc" -eq 75 ]]; then
+            echo 'complete=false' >> "$GITHUB_OUTPUT"
+          else
+            echo "Source build failed with exit code $build_rc" >&2
+            exit "$build_rc"
+          fi
+
+      - name: Validate and sign final ARM64 APK
+        if: steps.compile.outputs.complete == 'true'
+        env:
+          RELEASE_KEYSTORE_B64: ${{ secrets.TITANIUM_RELEASE_KEYSTORE_B64 }}
+          RELEASE_KEY_ALIAS: ${{ secrets.TITANIUM_RELEASE_KEY_ALIAS }}
+          RELEASE_STORE_PASSWORD: ${{ secrets.TITANIUM_RELEASE_STORE_PASSWORD }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.TITANIUM_RELEASE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          source_apk='artifacts/Titanium-Browser-Personal-source-arm64-v8a.apk'
+          final_apk='artifacts/Titanium-Browser-Personal-final-arm64-v8a.apk'
+          test -s "$source_apk"
+          test -n "$RELEASE_KEYSTORE_B64"
+          test -n "$RELEASE_KEY_ALIAS"
+          test -n "$RELEASE_STORE_PASSWORD"
+          test -n "$RELEASE_KEY_PASSWORD"
+
+          keystore="$RUNNER_TEMP/titanium-personal-release.p12"
+          printf '%s' "$RELEASE_KEYSTORE_B64" | base64 --decode > "$keystore"
+          chmod 600 "$keystore"
+
+          build_tools='chromium/src/third_party/android_sdk/public/build-tools'
+          aapt2="$(find "$build_tools" -type f -name aapt2 | sort -V | tail -n 1)"
+          apksigner="$(find "$build_tools" -type f -name apksigner | sort -V | tail -n 1)"
+          zipalign="$(find "$build_tools" -type f -name zipalign | sort -V | tail -n 1)"
+          test -x "$aapt2"
+          test -x "$apksigner"
+          test -x "$zipalign"
+
+          "$zipalign" -c -P 16 4 "$source_apk"
+          "$apksigner" sign \
+            --ks "$keystore" \
+            --ks-key-alias "$RELEASE_KEY_ALIAS" \
+            --ks-pass env:RELEASE_STORE_PASSWORD \
+            --key-pass env:RELEASE_KEY_PASSWORD \
+            --out "$final_apk" \
+            "$source_apk"
+
+          test -s "$final_apk"
+          file "$final_apk" | tee artifacts/file-report.txt
+          unzip -tq "$final_apk"
+          "$zipalign" -c -P 16 4 "$final_apk" | tee artifacts/zipalign-report.txt
+
+          mapfile -t abi_dirs < <(zipinfo -1 "$final_apk" | sed -n 's#^lib/\([^/]*\)/.*#\1#p' | sort -u)
+          printf '%s\n' "${abi_dirs[@]}" | tee artifacts/abis.txt
+          [[ "${#abi_dirs[@]}" -eq 1 && "${abi_dirs[0]}" == 'arm64-v8a' ]]
+
+          "$aapt2" dump badging "$final_apk" | tee artifacts/aapt-badging.txt
+          grep -F "package: name='com.trigg4i.titanium.personal'" \
+            artifacts/aapt-badging.txt
+          grep -F "application-label:'Titanium Browser Personal'" \
+            artifacts/aapt-badging.txt
+          grep -F "minSdkVersion:'29'" artifacts/aapt-badging.txt
+          grep -F "targetSdkVersion:'36'" artifacts/aapt-badging.txt
+          "$apksigner" verify --verbose --print-certs "$final_apk" \
+            | tee artifacts/apksigner-verification.txt
+          grep -F 'Verified using v3 scheme (APK Signature Scheme v3): true' \
+            artifacts/apksigner-verification.txt
+          grep -F 'Number of signers: 1' artifacts/apksigner-verification.txt
+          grep -F \
+            'certificate SHA-256 digest: 74a5f0e71a63d20aba6995142b0e77bc7c03088c162deccf312bc22195c2c066' \
+            artifacts/apksigner-verification.txt
+          (
+            cd artifacts
+            sha256sum Titanium-Browser-Personal-final-arm64-v8a.apk \
+              | tee SHA256SUMS.txt
+          )
+          stat --printf='%n %s bytes\n' "$final_apk" | tee artifacts/size.txt
+
+          cp INSTALLATION.md artifacts/
+          cp BUILD_REPORT.md artifacts/
+          cp FINAL_BUILD_REPORT.md artifacts/
+          cp FINAL_FEATURE_MATRIX.md artifacts/
+          cp FINAL_KNOWN_LIMITATIONS.md artifacts/
+          cp UPDATE_GUIDE.md artifacts/
+          cp CHANGELOG_FINAL.md artifacts/
+          cp LICENSES_AND_CREDITS.md artifacts/
+          cp LICENSE artifacts/LICENSE
+          cp WORK_MASTER_INSTRUCTIONS.md artifacts/
+
+          (
+            cd artifacts
+            zip -9 Titanium-Browser-Personal-final.zip \
+              Titanium-Browser-Personal-final-arm64-v8a.apk \
+              SHA256SUMS.txt \
+              INSTALLATION.md \
+              BUILD_REPORT.md \
+              FINAL_BUILD_REPORT.md \
+              FINAL_FEATURE_MATRIX.md \
+              FINAL_KNOWN_LIMITATIONS.md \
+              UPDATE_GUIDE.md \
+              CHANGELOG_FINAL.md \
+              LICENSES_AND_CREDITS.md \
+              LICENSE
+          )
+          rm -f "$keystore"
+
+      - name: Capture stage diagnostics
+        if: always()
+        run: |
+          set -u
+          mkdir -p diagnostics
+          if [[ -f source-build.log ]]; then
+            cp source-build.log diagnostics/source-build.log
+          fi
+          df -h > diagnostics/disk-final.txt
+          free -h > diagnostics/memory-final.txt
+          git rev-parse HEAD > diagnostics/repository-commit.txt
+          git -C vanadium rev-parse HEAD > diagnostics/vanadium-commit.txt
+          if [[ -d chromium/src/out/Default ]]; then
+            du -sh chromium/src/out/Default > diagnostics/output-size.txt
+            find chromium/src/out/Default -maxdepth 2 -type f \
+              -printf '%p %s bytes\n' | sort > diagnostics/output-files.txt
+            if [[ -f chromium/src/out/Default/.ninja_log ]]; then
+              tail -n 500 chromium/src/out/Default/.ninja_log \
+                > diagnostics/ninja-log-tail.txt
+            fi
+          fi
+
+      - name: Save resumable Chromium output checkpoint
+        id: save
+        if: steps.compile.outputs.complete == 'false'
+        uses: actions/cache/save@v4
+        with:
+          path: chromium/src/out/Default
+          key: titanium-chromium-out-${{ steps.build-key.outputs.key }}-${{ github.run_id }}-stage-${{ inputs.stage }}
+
+      - name: Remove superseded checkpoint
+        if: steps.compile.outputs.complete == 'false' && steps.restore.outputs.cache-matched-key != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESTORED_KEY: ${{ steps.restore.outputs.cache-matched-key }}
+        run: |
+          set -euo pipefail
+          if ! gh cache delete "$RESTORED_KEY" --repo "$GITHUB_REPOSITORY" --confirm; then
+            echo "::warning::Unable to delete superseded cache $RESTORED_KEY"
+          fi
+
+      - name: Upload final APK and delivery ZIP
+        if: steps.compile.outputs.complete == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: titanium-browser-personal-final-${{ github.sha }}
+          path: |
+            artifacts/Titanium-Browser-Personal-final-arm64-v8a.apk
+            artifacts/Titanium-Browser-Personal-final.zip
+            artifacts/SHA256SUMS.txt
+            artifacts/apksigner-verification.txt
+            artifacts/aapt-badging.txt
+            artifacts/abis.txt
+            artifacts/size.txt
+            artifacts/file-report.txt
+            artifacts/zipalign-report.txt
+            artifacts/SOURCE_BUILD_METADATA.txt
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+
+      - name: Upload stage diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: titanium-build-stage-${{ inputs.stage }}-diagnostics-${{ github.sha }}
+          path: diagnostics/
+          if-no-files-found: error
+          retention-days: 14

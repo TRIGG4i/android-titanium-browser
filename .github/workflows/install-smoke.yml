@@ -1,0 +1,221 @@
+name: ARM64 APK install smoke test
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: Run containing the signed APK artifact
+        required: false
+        default: '31314699195'
+        type: string
+      artifact_name:
+        description: Exact artifact name to download
+        required: false
+        default: titanium-browser-personal-final-b90814911309d9f5ca658a4d27c7f9e90ffab8ae
+        type: string
+      apk_filename:
+        description: APK filename inside the artifact
+        required: false
+        default: Titanium-Browser-Personal-final-arm64-v8a.apk
+        type: string
+      package_name:
+        description: Expected Android package
+        required: false
+        default: com.trigg4i.titanium.personal
+        type: string
+      expected_sha256:
+        description: Expected APK SHA-256
+        required: false
+        default: 755eb2d2523de833122ab6da8b5bb28d870b33e19a29591c47ec0c3ffa29913a
+        type: string
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: titanium-personal-arm64-install-smoke
+  cancel-in-progress: false
+
+jobs:
+  install-smoke:
+    name: Install and launch ARM64 APK on Android 16
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      TEST_SOURCE_RUN_ID: ${{ inputs.source_run_id || '31314699195' }}
+      TEST_ARTIFACT_NAME: ${{ inputs.artifact_name || 'titanium-browser-personal-final-b90814911309d9f5ca658a4d27c7f9e90ffab8ae' }}
+      TEST_APK_FILENAME: ${{ inputs.apk_filename || 'Titanium-Browser-Personal-final-arm64-v8a.apk' }}
+      TEST_PACKAGE: ${{ inputs.package_name || 'com.trigg4i.titanium.personal' }}
+      TEST_EXPECTED_SHA256: ${{ inputs.expected_sha256 || '755eb2d2523de833122ab6da8b5bb28d870b33e19a29591c47ec0c3ffa29913a' }}
+
+    steps:
+      - name: Checkout validation instructions
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Download signed ARM64 APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p downloaded diagnostics
+          gh run download "$TEST_SOURCE_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "$TEST_ARTIFACT_NAME" \
+            --dir downloaded
+          test -s "downloaded/$TEST_APK_FILENAME"
+          actual_sha="$(sha256sum "downloaded/$TEST_APK_FILENAME" | awk '{print $1}')"
+          [[ "$actual_sha" == "$TEST_EXPECTED_SHA256" ]]
+          cp "downloaded/$TEST_APK_FILENAME" downloaded/test.apk
+
+      - name: Set up Java for Android SDK tools
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Install pinned Android SDK command-line tools
+        run: |
+          set -euo pipefail
+          sdk_root="$RUNNER_TEMP/android-sdk"
+          tools_zip="$RUNNER_TEMP/android-command-line-tools.zip"
+          curl --fail --location --retry 3 \
+            --output "$tools_zip" \
+            'https://dl.google.com/android/repository/commandlinetools-linux-15859902_latest.zip'
+          printf '%s  %s\n' \
+            '4e4c464f145a7512b57d088ac6c278c03c9eea610886b35a5e0804e74eedf583' \
+            "$tools_zip" | sha256sum --check --strict
+          mkdir -p "$sdk_root/cmdline-tools" "$RUNNER_TEMP/android-tools-unpack"
+          unzip -q "$tools_zip" -d "$RUNNER_TEMP/android-tools-unpack"
+          mv "$RUNNER_TEMP/android-tools-unpack/cmdline-tools" \
+            "$sdk_root/cmdline-tools/latest"
+          echo "ANDROID_HOME=$sdk_root" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$sdk_root" >> "$GITHUB_ENV"
+          echo "$sdk_root/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          echo "$sdk_root/platform-tools" >> "$GITHUB_PATH"
+          echo "$sdk_root/emulator" >> "$GITHUB_PATH"
+
+      - name: Install Android 16 Google APIs emulator image
+        env:
+          ANDROID_AVD_HOME: ${{ runner.temp }}/avd
+        run: |
+          set -euo pipefail
+          mkdir -p "$ANDROID_AVD_HOME"
+          set +o pipefail
+          yes | sdkmanager --licenses > diagnostics/sdk-licenses.log
+          license_rc="${PIPESTATUS[1]}"
+          set -o pipefail
+          [[ "$license_rc" -eq 0 ]]
+          sdkmanager --install \
+            'platform-tools' \
+            'emulator' \
+            'system-images;android-36;google_apis;x86_64' \
+            | tee diagnostics/sdk-install.log
+          printf 'no\n' | avdmanager create avd \
+            --force \
+            --name titanium-api36 \
+            --package 'system-images;android-36;google_apis;x86_64' \
+            --device pixel_6
+
+      - name: Boot Android 16 emulator with KVM
+        env:
+          ANDROID_AVD_HOME: ${{ runner.temp }}/avd
+        run: |
+          set -euo pipefail
+          test -e /dev/kvm
+          sudo chmod 666 /dev/kvm
+          adb start-server
+          emulator -accel-check | tee diagnostics/emulator-acceleration.txt
+          emulator @titanium-api36 \
+            -no-window \
+            -no-audio \
+            -no-boot-anim \
+            -no-snapshot \
+            -no-metrics \
+            -gpu swiftshader_indirect \
+            -memory 4096 \
+            > diagnostics/emulator.log 2>&1 &
+          echo "$!" > diagnostics/emulator.pid
+          sleep 10
+          ps -ef | grep -E '[e]mulator|[q]emu' > diagnostics/emulator-processes.txt
+          adb devices -l | tee diagnostics/adb-devices-initial.txt
+          device_deadline=$((SECONDS + 900))
+          until [[ "$(adb get-state 2>/dev/null || true)" == device ]]; do
+            if (( SECONDS >= device_deadline )); then
+              echo 'Timed out waiting for the ARM64 emulator device' >&2
+              exit 1
+            fi
+            sleep 10
+          done
+          boot_deadline=$((SECONDS + 2400))
+          until [[ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" == 1 ]]; do
+            if (( SECONDS >= boot_deadline )); then
+              echo 'Timed out waiting for Android boot completion' >&2
+              exit 1
+            fi
+            sleep 10
+          done
+          adb shell getprop | tee diagnostics/device-properties.txt
+          adb shell getprop ro.product.cpu.abilist \
+            | tee diagnostics/device-abi-list.txt
+          adb shell getprop ro.dalvik.vm.native.bridge \
+            | tee diagnostics/native-bridge.txt
+          adb shell input keyevent 82
+
+      - name: Install and launch signed APK
+        run: |
+          set -euo pipefail
+          apk='downloaded/test.apk'
+          package="$TEST_PACKAGE"
+          adb logcat -c
+          adb install --no-streaming "$apk" | tee diagnostics/adb-install.txt
+          adb shell pm path "$package" | tee diagnostics/package-path.txt
+          adb shell dumpsys package "$package" > diagnostics/package-dumpsys.txt
+          grep -E 'versionCode=|versionName=|primaryCpuAbi=' diagnostics/package-dumpsys.txt \
+            | head -n 20 | tee diagnostics/installed-version.txt
+          adb shell monkey -p "$package" -c android.intent.category.LAUNCHER 1 \
+            | tee diagnostics/launch.txt
+          sleep 45
+          adb shell pidof "$package" | tee diagnostics/process-id.txt
+          test -s diagnostics/process-id.txt
+          adb exec-out screencap -p > diagnostics/first-launch.png
+          adb shell am start -W \
+            -a android.intent.action.VIEW \
+            -d 'https://example.com/' \
+            -p "$package" | tee diagnostics/https-navigation.txt
+          sleep 30
+          adb shell dumpsys activity activities \
+            | grep -F "$package" \
+            | head -n 40 \
+            | tee diagnostics/active-browser.txt
+          adb exec-out screencap -p > diagnostics/https-navigation.png
+          adb shell settings put system accelerometer_rotation 0
+          adb shell settings put system user_rotation 1
+          sleep 15
+          adb exec-out screencap -p > diagnostics/landscape.png
+          adb shell am force-stop "$package"
+          adb shell monkey -p "$package" -c android.intent.category.LAUNCHER 1 \
+            | tee diagnostics/relaunch.txt
+          sleep 20
+          adb shell pidof "$package" | tee diagnostics/relaunch-process-id.txt
+          test -s diagnostics/relaunch-process-id.txt
+          adb logcat -d -v threadtime > diagnostics/logcat.txt
+          if grep -En "FATAL EXCEPTION.*${package}|Process: ${package}.*FATAL EXCEPTION" diagnostics/logcat.txt; then
+            echo 'Fatal application exception detected after launch' >&2
+            exit 1
+          fi
+
+      - name: Stop emulator
+        if: always()
+        run: |
+          adb emu kill || true
+
+      - name: Upload install evidence
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: titanium-arm64-install-smoke-${{ github.sha }}
+          path: diagnostics/
+          if-no-files-found: error
+          retention-days: 14

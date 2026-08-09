@@ -3,9 +3,36 @@
 mkdir -p chrome/android/java/res_titanium_base
 cp $SCRIPT_DIR/res/drawable/themed_app_icon.xml chrome/android/java/res_titanium_base/drawable/themed_app_icon.xml
 for icon in $(find chrome/android/java/res_titanium_base -type f -name '*.png'); do convert $icon -fill navy -tint 36 $icon && $SCRIPT_DIR/res/icon.sh $icon; done
+
+# The Vanadium branding patch creates the Android launcher/widget strings in
+# this generated resource set. Keep the upstream branding elsewhere, but make
+# the installed personal application unambiguous on the device launcher.
+android_branding_file=chrome/android/java/res_titanium_base/values/channel_constants.xml
+grep -Fq '<string name="app_name" translatable="false">Titanium</string>' \
+    "$android_branding_file"
+sed -i \
+    -e 's|>Titanium</string>|>Titanium Browser Personal</string>|' \
+    -e 's|>Titanium bookmarks</string>|>Titanium Browser Personal bookmarks</string>|' \
+    -e 's|>Titanium search</string>|>Titanium Browser Personal search</string>|' \
+    -e 's|>Titanium quick action search</string>|>Titanium Browser Personal quick action search</string>|' \
+    "$android_branding_file"
+grep -Fq '<string name="app_name" translatable="false">Titanium Browser Personal</string>' \
+    "$android_branding_file"
+
 sed -i 's|<application |<application android:extractNativeLibs="false" |' chrome/android/java/AndroidManifest.xml
 sed -i 's|<data android:mimeType="message/rfc822"/>|<data android:mimeType="message/rfc822"/><data android:mimeType="application/pdf"/>|' chrome/android/java/AndroidManifest.xml
 # sed -i 's|Google LLC|jqssun, Google LLC|' chrome/browser/ui/android/strings/android_chrome_strings.grd
+
+# Keep the upstream Titanium rebranding machinery while giving this personal
+# package an unambiguous, non-official application label.
+branding_file=chrome/app/chromium_strings.grd
+branding_matches=$(grep -cE '^[[:space:]]*Titanium$' "$branding_file")
+if [ "$branding_matches" -lt 2 ]; then
+    echo "Expected Titanium product-name entries were not found" >&2
+    return 1
+fi
+sed -i 's|^\([[:space:]]*\)Titanium$|\1Titanium Browser Personal|' "$branding_file"
+grep -q 'Titanium Browser Personal' "$branding_file"
 
 sed -i 's|if (!_omit_dex) {|if (_is_base_module \&\& !_omit_dex) {|' build/config/android/rules.gni
 sed -i '/safelyRemovePreference(prefFragment/d' titanium/chromium_src/chrome/browser/language/android/java/src/org/chromium/chrome/browser/language/settings/LanguageSettingsExt.java

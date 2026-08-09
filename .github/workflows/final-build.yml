@@ -1,0 +1,188 @@
+name: Final ARM64 source build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: titanium-personal-arm64-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  stage-1:
+    uses: ./.github/workflows/source-build-stage.yml
+    with:
+      stage: 1
+    secrets: inherit
+
+  stage-2:
+    needs: stage-1
+    if: needs.stage-1.result == 'success' && needs.stage-1.outputs.complete != 'true'
+    uses: ./.github/workflows/source-build-stage.yml
+    with:
+      stage: 2
+    secrets: inherit
+
+  stage-3:
+    needs: [stage-1, stage-2]
+    if: >-
+      always() &&
+      needs.stage-1.result == 'success' &&
+      needs.stage-1.outputs.complete != 'true' &&
+      needs.stage-2.result == 'success' &&
+      needs.stage-2.outputs.complete != 'true'
+    uses: ./.github/workflows/source-build-stage.yml
+    with:
+      stage: 3
+    secrets: inherit
+
+  stage-4:
+    needs: [stage-1, stage-2, stage-3]
+    if: >-
+      always() &&
+      needs.stage-1.result == 'success' &&
+      needs.stage-1.outputs.complete != 'true' &&
+      needs.stage-2.result == 'success' &&
+      needs.stage-2.outputs.complete != 'true' &&
+      needs.stage-3.result == 'success' &&
+      needs.stage-3.outputs.complete != 'true'
+    uses: ./.github/workflows/source-build-stage.yml
+    with:
+      stage: 4
+    secrets: inherit
+
+  stage-5:
+    needs: [stage-1, stage-2, stage-3, stage-4]
+    if: >-
+      always() &&
+      needs.stage-1.result == 'success' &&
+      needs.stage-1.outputs.complete != 'true' &&
+      needs.stage-2.result == 'success' &&
+      needs.stage-2.outputs.complete != 'true' &&
+      needs.stage-3.result == 'success' &&
+      needs.stage-3.outputs.complete != 'true' &&
+      needs.stage-4.result == 'success' &&
+      needs.stage-4.outputs.complete != 'true'
+    uses: ./.github/workflows/source-build-stage.yml
+    with:
+      stage: 5
+    secrets: inherit
+
+  stage-6:
+    needs: [stage-1, stage-2, stage-3, stage-4, stage-5]
+    if: >-
+      always() &&
+      needs.stage-1.result == 'success' && needs.stage-1.outputs.complete != 'true' &&
+      needs.stage-2.result == 'success' && needs.stage-2.outputs.complete != 'true' &&
+      needs.stage-3.result == 'success' && needs.stage-3.outputs.complete != 'true' &&
+      needs.stage-4.result == 'success' && needs.stage-4.outputs.complete != 'true' &&
+      needs.stage-5.result == 'success' && needs.stage-5.outputs.complete != 'true'
+    uses: ./.github/workflows/source-build-stage.yml
+    with:
+      stage: 6
+    secrets: inherit
+
+  stage-7:
+    needs: [stage-1, stage-2, stage-3, stage-4, stage-5, stage-6]
+    if: >-
+      always() &&
+      needs.stage-1.result == 'success' && needs.stage-1.outputs.complete != 'true' &&
+      needs.stage-2.result == 'success' && needs.stage-2.outputs.complete != 'true' &&
+      needs.stage-3.result == 'success' && needs.stage-3.outputs.complete != 'true' &&
+      needs.stage-4.result == 'success' && needs.stage-4.outputs.complete != 'true' &&
+      needs.stage-5.result == 'success' && needs.stage-5.outputs.complete != 'true' &&
+      needs.stage-6.result == 'success' && needs.stage-6.outputs.complete != 'true'
+    uses: ./.github/workflows/source-build-stage.yml
+    with:
+      stage: 7
+    secrets: inherit
+
+  stage-8:
+    needs: [stage-1, stage-2, stage-3, stage-4, stage-5, stage-6, stage-7]
+    if: >-
+      always() &&
+      needs.stage-1.result == 'success' && needs.stage-1.outputs.complete != 'true' &&
+      needs.stage-2.result == 'success' && needs.stage-2.outputs.complete != 'true' &&
+      needs.stage-3.result == 'success' && needs.stage-3.outputs.complete != 'true' &&
+      needs.stage-4.result == 'success' && needs.stage-4.outputs.complete != 'true' &&
+      needs.stage-5.result == 'success' && needs.stage-5.outputs.complete != 'true' &&
+      needs.stage-6.result == 'success' && needs.stage-6.outputs.complete != 'true' &&
+      needs.stage-7.result == 'success' && needs.stage-7.outputs.complete != 'true'
+    uses: ./.github/workflows/source-build-stage.yml
+    with:
+      stage: 8
+    secrets: inherit
+
+  stage-9:
+    needs: [stage-1, stage-2, stage-3, stage-4, stage-5, stage-6, stage-7, stage-8]
+    if: >-
+      always() &&
+      needs.stage-1.result == 'success' && needs.stage-1.outputs.complete != 'true' &&
+      needs.stage-2.result == 'success' && needs.stage-2.outputs.complete != 'true' &&
+      needs.stage-3.result == 'success' && needs.stage-3.outputs.complete != 'true' &&
+      needs.stage-4.result == 'success' && needs.stage-4.outputs.complete != 'true' &&
+      needs.stage-5.result == 'success' && needs.stage-5.outputs.complete != 'true' &&
+      needs.stage-6.result == 'success' && needs.stage-6.outputs.complete != 'true' &&
+      needs.stage-7.result == 'success' && needs.stage-7.outputs.complete != 'true' &&
+      needs.stage-8.result == 'success' && needs.stage-8.outputs.complete != 'true'
+    uses: ./.github/workflows/source-build-stage.yml
+    with:
+      stage: 9
+    secrets: inherit
+
+  stage-10:
+    needs: [stage-1, stage-2, stage-3, stage-4, stage-5, stage-6, stage-7, stage-8, stage-9]
+    if: >-
+      always() &&
+      needs.stage-1.result == 'success' && needs.stage-1.outputs.complete != 'true' &&
+      needs.stage-2.result == 'success' && needs.stage-2.outputs.complete != 'true' &&
+      needs.stage-3.result == 'success' && needs.stage-3.outputs.complete != 'true' &&
+      needs.stage-4.result == 'success' && needs.stage-4.outputs.complete != 'true' &&
+      needs.stage-5.result == 'success' && needs.stage-5.outputs.complete != 'true' &&
+      needs.stage-6.result == 'success' && needs.stage-6.outputs.complete != 'true' &&
+      needs.stage-7.result == 'success' && needs.stage-7.outputs.complete != 'true' &&
+      needs.stage-8.result == 'success' && needs.stage-8.outputs.complete != 'true' &&
+      needs.stage-9.result == 'success' && needs.stage-9.outputs.complete != 'true'
+    uses: ./.github/workflows/source-build-stage.yml
+    with:
+      stage: 10
+    secrets: inherit
+
+  require-final-apk:
+    name: Require a validated final APK
+    if: always()
+    needs: [stage-1, stage-2, stage-3, stage-4, stage-5, stage-6, stage-7, stage-8, stage-9, stage-10]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Confirm one source-build stage completed
+        env:
+          STAGE_1_COMPLETE: ${{ needs.stage-1.outputs.complete }}
+          STAGE_2_COMPLETE: ${{ needs.stage-2.outputs.complete }}
+          STAGE_3_COMPLETE: ${{ needs.stage-3.outputs.complete }}
+          STAGE_4_COMPLETE: ${{ needs.stage-4.outputs.complete }}
+          STAGE_5_COMPLETE: ${{ needs.stage-5.outputs.complete }}
+          STAGE_6_COMPLETE: ${{ needs.stage-6.outputs.complete }}
+          STAGE_7_COMPLETE: ${{ needs.stage-7.outputs.complete }}
+          STAGE_8_COMPLETE: ${{ needs.stage-8.outputs.complete }}
+          STAGE_9_COMPLETE: ${{ needs.stage-9.outputs.complete }}
+          STAGE_10_COMPLETE: ${{ needs.stage-10.outputs.complete }}
+        run: |
+          set -euo pipefail
+          if [[ "$STAGE_1_COMPLETE" == true ||
+                "$STAGE_2_COMPLETE" == true ||
+                "$STAGE_3_COMPLETE" == true ||
+                "$STAGE_4_COMPLETE" == true ||
+                "$STAGE_5_COMPLETE" == true ||
+                "$STAGE_6_COMPLETE" == true ||
+                "$STAGE_7_COMPLETE" == true ||
+                "$STAGE_8_COMPLETE" == true ||
+                "$STAGE_9_COMPLETE" == true ||
+                "$STAGE_10_COMPLETE" == true ]]; then
+            echo 'A source-build stage produced and validated the final APK.'
+            exit 0
+          fi
+          echo 'No source-build stage produced a final APK.' >&2
+          exit 1
