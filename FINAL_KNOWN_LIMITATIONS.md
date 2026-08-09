@@ -20,5 +20,11 @@
   signature.
 - L'écran « À propos », les crédits affichés dans l'application et la date de
   build n'ont pas été inspectés manuellement pendant le smoke test.
+- GitHub refuse le passage direct en privé car le dépôt est un fork public.
+  L'action manuelle restante est d'utiliser **Settings → General → Danger Zone
+  → Leave fork network**, en acceptant la perte permanente des métadonnées du
+  fork, puis de passer le dépôt autonome en privé. Aucune release publique n'a
+  été créée ; l'artefact Actions validé et les fichiers locaux assurent la
+  livraison entre-temps.
 - Le dépôt doit rester sans keystore ni mot de passe. La sauvegarde de signature
   est livrée séparément et doit être conservée pour toutes les mises à jour.
