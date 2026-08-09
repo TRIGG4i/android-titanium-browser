@@ -3,6 +3,22 @@
 mkdir -p chrome/android/java/res_titanium_base
 cp $SCRIPT_DIR/res/drawable/themed_app_icon.xml chrome/android/java/res_titanium_base/drawable/themed_app_icon.xml
 for icon in $(find chrome/android/java/res_titanium_base -type f -name '*.png'); do convert $icon -fill navy -tint 36 $icon && $SCRIPT_DIR/res/icon.sh $icon; done
+
+# The Vanadium branding patch creates the Android launcher/widget strings in
+# this generated resource set. Keep the upstream branding elsewhere, but make
+# the installed personal application unambiguous on the device launcher.
+android_branding_file=chrome/android/java/res_titanium_base/values/channel_constants.xml
+grep -Fq '<string name="app_name" translatable="false">Titanium</string>' \
+    "$android_branding_file"
+sed -i \
+    -e 's|>Titanium</string>|>Titanium Browser Personal</string>|' \
+    -e 's|>Titanium bookmarks</string>|>Titanium Browser Personal bookmarks</string>|' \
+    -e 's|>Titanium search</string>|>Titanium Browser Personal search</string>|' \
+    -e 's|>Titanium quick action search</string>|>Titanium Browser Personal quick action search</string>|' \
+    "$android_branding_file"
+grep -Fq '<string name="app_name" translatable="false">Titanium Browser Personal</string>' \
+    "$android_branding_file"
+
 sed -i 's|<application |<application android:extractNativeLibs="false" |' chrome/android/java/AndroidManifest.xml
 sed -i 's|<data android:mimeType="message/rfc822"/>|<data android:mimeType="message/rfc822"/><data android:mimeType="application/pdf"/>|' chrome/android/java/AndroidManifest.xml
 # sed -i 's|Google LLC|jqssun, Google LLC|' chrome/browser/ui/android/strings/android_chrome_strings.grd
