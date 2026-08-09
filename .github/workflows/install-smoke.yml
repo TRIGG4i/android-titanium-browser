@@ -28,10 +28,6 @@ on:
         required: false
         default: 755eb2d2523de833122ab6da8b5bb28d870b33e19a29591c47ec0c3ffa29913a
         type: string
-  push:
-    branches:
-      - work/final-browser
-
 permissions:
   actions: read
   contents: read
