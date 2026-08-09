@@ -83,3 +83,18 @@ Les fonctions marquées « présentes dans les sources » dans
 `FINAL_FEATURE_MATRIX.md` n'ont pas été présentées comme testées lorsqu'aucun
 scénario réel ne les a exécutées. Les limites restantes sont consignées dans
 `FINAL_KNOWN_LIMITATIONS.md`.
+
+## Livraison et visibilité GitHub
+
+L'APK et les preuves sont disponibles dans l'artefact Actions
+`titanium-browser-personal-final-b90814911309d9f5ca658a4d27c7f9e90ffab8ae`
+(ID `9040074138`, rétention configurée à 30 jours). L'APK et le ZIP final avec
+les rapports à jour sont également conservés dans `artifacts/final/` du clone
+de travail, dossier volontairement ignoré par Git.
+
+GitHub refuse de rendre ce dépôt privé tant qu'il appartient au réseau public
+du fork (`Public forks can't be made private`). Le détachement disponible dans
+l'interface GitHub est permanent et ferait perdre les métadonnées du fork,
+notamment la PR et ses liens de preuve. Aucune release publique supplémentaire
+n'a donc été créée. L'unique action manuelle restante est détaillée dans
+`FINAL_KNOWN_LIMITATIONS.md`.
