@@ -12,3 +12,6 @@
 - Validation finale automatisée de l'APK, de l'ABI, de l'alignement et de la signature.
 - Signature personnelle persistante fournie exclusivement via les secrets Actions.
 - Diagnostics de chaque segment et ZIP de secours produits par le workflow.
+- Installation réelle automatisée sur Android 16, lancement, navigation HTTPS,
+  rotation et relance validés sans exception fatale détectée.
+- Libellé Android final vérifié par `aapt2` : `Titanium Browser Personal`.

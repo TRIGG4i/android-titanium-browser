@@ -185,6 +185,7 @@ jobs:
           stat --printf='%n %s bytes\n' "$final_apk" | tee artifacts/size.txt
 
           cp INSTALLATION.md artifacts/
+          cp BUILD_REPORT.md artifacts/
           cp FINAL_BUILD_REPORT.md artifacts/
           cp FINAL_FEATURE_MATRIX.md artifacts/
           cp FINAL_KNOWN_LIMITATIONS.md artifacts/
@@ -200,6 +201,7 @@ jobs:
               Titanium-Browser-Personal-final-arm64-v8a.apk \
               SHA256SUMS.txt \
               INSTALLATION.md \
+              BUILD_REPORT.md \
               FINAL_BUILD_REPORT.md \
               FINAL_FEATURE_MATRIX.md \
               FINAL_KNOWN_LIMITATIONS.md \

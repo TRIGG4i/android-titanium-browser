@@ -3,10 +3,10 @@
 Les statuts distinguent la présence vérifiée dans les sources d'un test réel du
 binaire. Aucun comportement non exécuté n'est présenté comme validé.
 
-| Domaine | État avant test APK | Preuve actuelle | Validation finale requise |
+| Domaine | État final | Preuve exécutée ou source | Validation encore requise |
 |---|---|---|---|
-| Chromium complet | Présent dans la chaîne source | Cible GN `chrome_public_apk`, base Chromium 151 | Démarrage et navigation HTTPS |
-| Architecture ARM64 | Configurée | `target_cpu = "arm64"` | `zipinfo` : seulement `arm64-v8a` |
+| Chromium complet | Construit et lancé | Cible GN `chrome_public_apk`, Chromium 151, lancement et HTTPS réussis | Navigation fonctionnelle étendue sur appareil |
+| Architecture ARM64 | Validée | `target_cpu = "arm64"`, APK uniquement `arm64-v8a`, package installé avec `primaryCpuAbi=arm64-v8a` | Essai natif sur Galaxy S22 recommandé |
 | Chrome Web Store | Implémentation amont Titanium conservée | Patches et documentation Titanium | Installation réelle d'une extension MV3 |
 | `chrome://extensions` | Implémentation conservée | Patches UI/extensions | Activation, détails, options et suppression |
 | Extension décompressée SAF | Correctif source présent | Correctif `VirtualDocumentPath` dans `patch.sh` | Charger un dossier d'extension |
@@ -20,12 +20,15 @@ binaire. Aucun comportement non exécuté n'est présenté comme validé.
 | Zoom Marketplace | Non validé | Aucun faux résultat annoncé | Formulaires, OAuth, popup, upload/download |
 | ChatGPT/Codex Web | Non validé | Aucun faux résultat annoncé | Session, OAuth GitHub, fichiers, clavier/DeX |
 | GitHub/Supabase/Vercel | Non validé | Aucun faux résultat annoncé | Navigation desktop, formulaires et OAuth |
-| Navigation privée | Base Chromium + correctifs présents | Patches Titanium | Démarrage, fermeture et absence de crash |
-| Téléchargements/uploads | Base Chromium | Cible navigateur complète | Fichiers réels et permissions Android |
+| Navigation privée | Base Chromium + correctifs présents | Patches Titanium ; onboarding visible au lancement | Démarrage, fermeture et absence de crash en privé |
+| Téléchargements/uploads | Base Chromium | Cible navigateur complète ; permissions visibles dans l'onboarding | Fichiers réels et permissions Android |
 | Caméra/micro/localisation | Base Chromium | Manifest généré par Chromium | Consentement et révocation par site |
 | Clavier/souris/DeX | Base desktop Android | `is_desktop_android = true` | Checklist sur appareil/DeX |
-| Nom personnel | Configuré dans les sources | Ressources `Titanium Browser Personal` | Libellé après installation |
-| Package personnel | Configuré dans GN | `com.trigg4i.titanium.personal` | `aapt2 dump badging` |
+| Démarrage/navigation | Validé | `adb install` réussi, processus actif, `https://example.com/` avec `Status: ok` | Parcours de navigation complet sur appareil |
+| Rotation/reprise | Validée | Capture paysage, arrêt forcé et relance avec nouveau PID | Samsung DeX et multi-fenêtre |
+| Nom personnel | Validé | `aapt2` : `application-label:'Titanium Browser Personal'` | Quelques textes internes amont restent `Titanium` |
+| Package personnel | Validé | `aapt2` et Android : `com.trigg4i.titanium.personal` | Aucune |
+| Signature | Validée | `apksigner` v3, un signataire RSA-4096, certificat attendu | Conserver la sauvegarde de clé |
 
 ## Checklist manuelle Galaxy S22
 
