@@ -55,7 +55,7 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Download signed ARM64 contingency APK
+      - name: Download signed ARM64 APK
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

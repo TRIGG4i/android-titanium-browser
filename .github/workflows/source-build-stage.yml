@@ -7,11 +7,6 @@ on:
         description: Sequential source-build stage number
         required: true
         type: number
-      fallback_cache_identity:
-        description: Previous compatible build identity for one-time incremental migration
-        required: false
-        default: 70fe3cf66edda8db6be17e97d2e38fa2043151092f6c45905729c56acf5bf12b
-        type: string
     outputs:
       complete:
         description: Whether this stage produced and validated the final APK
@@ -92,7 +87,6 @@ jobs:
           key: titanium-chromium-out-${{ steps.build-key.outputs.key }}-probe
           restore-keys: |
             titanium-chromium-out-${{ steps.build-key.outputs.key }}-
-            titanium-chromium-out-${{ inputs.fallback_cache_identity }}-
 
       - name: Build Chromium public APK slice for ARM64
         id: compile
@@ -163,8 +157,17 @@ jobs:
           [[ "${#abi_dirs[@]}" -eq 1 && "${abi_dirs[0]}" == 'arm64-v8a' ]]
 
           "$aapt2" dump badging "$final_apk" | tee artifacts/aapt-badging.txt
+          grep -F "package: name='com.trigg4i.titanium.personal'" \
+            artifacts/aapt-badging.txt
+          grep -F "application-label:'Titanium Browser Personal'" \
+            artifacts/aapt-badging.txt
+          grep -F "minSdkVersion:'29'" artifacts/aapt-badging.txt
+          grep -F "targetSdkVersion:'36'" artifacts/aapt-badging.txt
           "$apksigner" verify --verbose --print-certs "$final_apk" \
             | tee artifacts/apksigner-verification.txt
+          grep -F 'Verified using v3 scheme (APK Signature Scheme v3): true' \
+            artifacts/apksigner-verification.txt
+          grep -F 'Number of signers: 1' artifacts/apksigner-verification.txt
           grep -F \
             'certificate SHA-256 digest: 74a5f0e71a63d20aba6995142b0e77bc7c03088c162deccf312bc22195c2c066' \
             artifacts/apksigner-verification.txt
