@@ -600,9 +600,8 @@ index 7edad76e875c081e4e8d7de917658d006624de91..7af104a4a3dfc098d4c6c0ee504fa514
 +        is_request_android_desktop_site &&
 +        renderer_preferences_.user_agent_override.ua_metadata_override
 +                ->platform == "Windows" &&
-+        base::Contains(
-+            renderer_preferences_.user_agent_override.ua_string_override,
-+            "Windows NT 10.0; Win64; x64");
++        renderer_preferences_.user_agent_override.ua_string_override.find(
++            "Windows NT 10.0; Win64; x64") != std::string::npos;
      prefs.viewport_meta_enabled = !is_request_android_desktop_site;
 +    if (is_request_android_enhanced_desktop_site) {
 +      // Titanium enhanced desktop uses Blink's fixed 1280 CSS px television

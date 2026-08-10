@@ -142,8 +142,11 @@ PROFILE_EXPRESSION = r"""
     devicePixelRatio: window.devicePixelRatio,
     screenWidth: screen.width,
     screenHeight: screen.height,
+    narrowMobileLayout: matchMedia('(max-width: 768px)').matches,
     orientationType: screen.orientation ? screen.orientation.type : null,
     orientationAngle: screen.orientation ? screen.orientation.angle : null,
+    title: document.title,
+    bodyTextLength: document.body ? document.body.innerText.length : 0,
     mobileBlockingMessageVisible:
       document.body ? document.body.innerText.includes(%s) : false
   }));
@@ -159,6 +162,10 @@ def assert_enhanced(profile: dict[str, Any], context: str) -> None:
     assert profile["uaDataPlatform"] == "Windows", (context, profile)
     assert profile["navigatorPlatform"] == "Win32", (context, profile)
     assert min(profile["innerWidth"], profile["clientWidth"]) >= 1280, (context, profile)
+    assert profile["narrowMobileLayout"] is False, (context, profile)
+    form_factors = profile["uaDataHighEntropy"].get("formFactors")
+    if form_factors is not None:
+        assert "Desktop" in form_factors and "Mobile" not in form_factors, (context, profile)
 
 
 def ui_xml() -> ET.Element:
@@ -223,6 +230,26 @@ def request_headers(cdp: Cdp, host: str) -> dict[str, str]:
         if params.get("requestId") in request_ids:
             merged.update({key.lower(): str(value) for key, value in params["headers"].items()})
     return merged
+
+
+def document_response(cdp: Cdp, host: str) -> dict[str, Any]:
+    responses = []
+    for event in cdp.events:
+        if event.get("method") != "Network.responseReceived":
+            continue
+        params = event["params"]
+        response = params["response"]
+        if host in response.get("url", "") and params.get("type") == "Document":
+            responses.append(
+                {
+                    "url": response["url"],
+                    "status": response["status"],
+                    "mimeType": response.get("mimeType"),
+                }
+            )
+    if not responses:
+        raise AssertionError(f"No document response captured for {host}")
+    return responses[-1]
 
 
 def launch(package: str, url: str) -> None:
@@ -301,9 +328,15 @@ def main() -> None:
     assert_enhanced(results["zoom"], "Zoom Marketplace automatic rule")
     headers = request_headers(cdp, "marketplace.zoom.us")
     results["zoom_request_headers"] = headers
+    response = document_response(cdp, "marketplace.zoom.us")
+    results["zoom_document_response"] = response
     assert "Windows NT 10.0; Win64; x64" in headers.get("user-agent", ""), headers
     assert headers.get("sec-ch-ua-mobile") == "?0", headers
     assert headers.get("sec-ch-ua-platform") == '"Windows"', headers
+    assert 200 <= response["status"] < 400, response
+    assert results["zoom"]["url"].startswith("https://marketplace.zoom.us/"), results["zoom"]
+    assert results["zoom"]["title"].strip(), results["zoom"]
+    assert results["zoom"]["bodyTextLength"] > 100, results["zoom"]
     assert results["zoom"]["mobileBlockingMessageVisible"] is False, results["zoom"]
     cdp.close()
 
