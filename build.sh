@@ -12,6 +12,16 @@ PATCH_WORK_DIR="$CHROMIUM_DIR/vanadium-patches"
 ARTIFACT_DIR="$SCRIPT_DIR/artifacts"
 EXPECTED_VANADIUM_COMMIT="13c840a88df07096553710c9459b3e2ecd278235"
 BUILD_SLICE_SECONDS="${BUILD_SLICE_SECONDS:-15600}"
+TARGET_CPU="${TARGET_CPU:-arm64}"
+
+case "$TARGET_CPU" in
+    arm64) OUTPUT_ABI="arm64-v8a" ;;
+    x64) OUTPUT_ABI="x86_64" ;;
+    *)
+        echo "Unsupported TARGET_CPU: $TARGET_CPU" >&2
+        exit 1
+        ;;
+esac
 
 export VERSION CHROMIUM_SOURCE DEBIAN_FRONTEND=noninteractive
 export GIT_COMMITTER_NAME="Titanium Personal Builder"
@@ -90,12 +100,39 @@ gclient runhooks
 source "$SCRIPT_DIR/patch.sh"
 mkdir -p out/Default
 cp "$SCRIPT_DIR/args.gn" out/Default/args.gn
+sed -i -E "s/^target_cpu = \"[^\"]+\"$/target_cpu = \"$TARGET_CPU\"/" \
+    out/Default/args.gn
+grep -Fx "target_cpu = \"$TARGET_CPU\"" out/Default/args.gn
 
 # Git checkouts receive fresh mtimes on every hosted runner.  A resumed Ninja
 # output cache would otherwise look older than every source file and rebuild
 # from zero.  Normalize source/input mtimes while deliberately leaving the
 # cached output tree untouched.  Content hashes and GN inputs remain pinned.
 find . -path './out' -prune -o -type f -exec touch -h -d '@946684800' {} +
+
+# The fallback checkpoint predates the enhanced desktop profile. Make only the
+# inputs changed by that profile newer than restored Ninja outputs so Chromium
+# incrementally recompiles the affected browser/Blink/Java/resource graph.
+enhanced_desktop_inputs=(
+    chrome/android/java/res/values/ids.xml
+    chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
+    chrome/android/java/src/org/chromium/chrome/browser/app/appmenu/AppMenuPropertiesDelegateImpl.java
+    chrome/android/java/src/org/chromium/chrome/browser/customtabs/CustomTabAppMenuPropertiesDelegate.java
+    chrome/android/java/src/org/chromium/chrome/browser/tab/TabImpl.java
+    chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegate.java
+    chrome/browser/android/content/content_utils.cc
+    chrome/browser/android/content/java/src/org/chromium/chrome/browser/content/ContentUtils.java
+    chrome/browser/content_settings/request_desktop_site_web_contents_observer_android.cc
+    chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+    chrome/browser/ui/android/desktop_site/java/src/org/chromium/chrome/browser/desktop_site/DesktopSiteUtils.java
+    chrome/browser/ui/android/strings/android_chrome_strings.grd
+    content/browser/web_contents/web_contents_impl.cc
+    third_party/blink/renderer/core/frame/navigator.cc
+)
+for enhanced_desktop_input in "${enhanced_desktop_inputs[@]}"; do
+    test -f "$enhanced_desktop_input"
+    touch -h "$enhanced_desktop_input"
+done
 
 # A one-time cache migration may restore output produced before the personal
 # launcher label changed. Source mtimes are normalized above, so explicitly
@@ -139,7 +176,7 @@ if [[ "${#apk_candidates[@]}" -ne 1 ]]; then
     exit 1
 fi
 
-output_apk="$ARTIFACT_DIR/Titanium-Browser-Personal-source-arm64-v8a.apk"
+output_apk="$ARTIFACT_DIR/Titanium-Browser-Personal-source-$OUTPUT_ABI.apk"
 cp "${apk_candidates[0]}" "$output_apk"
 
 repo_commit="$(git -C "$SCRIPT_DIR" rev-parse HEAD)"
@@ -147,7 +184,7 @@ cat > "$ARTIFACT_DIR/SOURCE_BUILD_METADATA.txt" <<EOF
 repository_commit=$repo_commit
 chromium_version=$VERSION
 vanadium_commit=$actual_vanadium_commit
-target_cpu=arm64
+target_cpu=$TARGET_CPU
 target=chrome_public_apk
 package=com.trigg4i.titanium.personal
 EOF

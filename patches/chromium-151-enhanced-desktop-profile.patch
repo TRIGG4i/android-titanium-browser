@@ -1,0 +1,647 @@
+diff --git a/chrome/android/java/res/values/ids.xml b/chrome/android/java/res/values/ids.xml
+index b145eea10b173ad91b8944fb960cae513e8ba99e..b115021111e7883a095b7d9632025179b31c877e 100644
+--- a/chrome/android/java/res/values/ids.xml
++++ b/chrome/android/java/res/values/ids.xml
+@@ -224,6 +224,8 @@ found in the LICENSE file.
+     <item type="id" name="open_webapk_id" />
+     <item type="id" name="request_desktop_site_id" />
+     <item type="id" name="request_desktop_site_check_id" />
++    <item type="id" name="request_enhanced_desktop_site_id" />
++    <item type="id" name="request_enhanced_desktop_site_check_id" />
+     <item type="id" name="auto_dark_web_contents_id" />
+     <item type="id" name="auto_dark_web_contents_check_id" />
+     <item type="id" name="paint_preview_show_id" />
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
+index bc53c8309c5dbf52fbb6a00fb48b4129b28bf49c..fb51606707eefeb0169042d88292a67ddab1d29d 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
+@@ -112,6 +112,7 @@ import org.chromium.chrome.browser.compositor.layouts.LayoutManagerImpl;
+ import org.chromium.chrome.browser.compositor.layouts.SceneChangeObserver;
+ import org.chromium.chrome.browser.compositor.layouts.content.TabContentManagerHandler;
+ import org.chromium.chrome.browser.contextualsearch.ContextualSearchManager;
++import org.chromium.chrome.browser.content.ContentUtils;
+ import org.chromium.chrome.browser.customtabs.PopupCreatorFactory;
+ import org.chromium.chrome.browser.desktop_site.DesktopSiteUtils;
+ import org.chromium.chrome.browser.device.DeviceClassManager;
+@@ -3090,8 +3091,15 @@ public abstract class ChromeActivity extends AsyncInitializationActivity
+                     currentTab.getWebContents().getNavigationController().getUseDesktopUserAgent();
+             usingDesktopUserAgent = !usingDesktopUserAgent;
+             Profile profile = getCurrentTabModel().getProfile();
++            if (!usingDesktopUserAgent) {
++                DesktopSiteUtils.setEnhancedDesktopSiteForUrl(currentTab.getUrl(), false);
++            }
+             DesktopSiteUtils.setRequestDesktopSiteContentSettingsForUrl(
+                     profile, currentTab.getUrl(), usingDesktopUserAgent);
++            ContentUtils.setUserAgentOverride(
++                    assumeNonNull(currentTab.getWebContents()),
++                    usingDesktopUserAgent,
++                    /* enhancedDesktop= */ false);
+             // Use TabUtils.switchUserAgent() instead of Tab.reload(). Because we need to reload
+             // with LoadOriginalRequestURL. See http://crbug.com/40894824 for details.
+             TabUtils.switchUserAgent(currentTab, usingDesktopUserAgent);
+@@ -3101,6 +3109,31 @@ public abstract class ChromeActivity extends AsyncInitializationActivity
+             return true;
+         }
+ 
++        if (id == R.id.request_enhanced_desktop_site_id
++                || id == R.id.request_enhanced_desktop_site_check_id) {
++            if (currentTab.isIncognitoBranded()) return false;
++            boolean enhancedDesktop =
++                    !DesktopSiteUtils.shouldUseEnhancedDesktopSite(currentTab.getUrl());
++            Profile profile = getCurrentTabModel().getProfile();
++            DesktopSiteUtils.setEnhancedDesktopSiteForUrl(
++                    currentTab.getUrl(), enhancedDesktop);
++            DesktopSiteUtils.setRequestDesktopSiteContentSettingsForUrl(
++                    profile, currentTab.getUrl(), /* useDesktopUserAgent= */ true);
++            ContentUtils.setUserAgentOverride(
++                    assumeNonNull(currentTab.getWebContents()),
++                    /* overrideInNewTabs= */ true,
++                    enhancedDesktop);
++            if (currentTab
++                    .getWebContents()
++                    .getNavigationController()
++                    .getUseDesktopUserAgent()) {
++                currentTab.reload();
++            } else {
++                TabUtils.switchUserAgent(currentTab, /* switchToDesktop= */ true);
++            }
++            return true;
++        }
++
+         if (id == R.id.auto_dark_web_contents_id || id == R.id.auto_dark_web_contents_check_id) {
+             // Get values needed to check/enable auto dark for the current site.
+             Profile profile = getCurrentTabModel().getProfile();
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/app/appmenu/AppMenuPropertiesDelegateImpl.java b/chrome/android/java/src/org/chromium/chrome/browser/app/appmenu/AppMenuPropertiesDelegateImpl.java
+index ca950caa15b62ac286b6f58dd2cfd86a2fcb516f..8602baf5fc475c6dd1842e100e1759410d8d6320 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/app/appmenu/AppMenuPropertiesDelegateImpl.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/app/appmenu/AppMenuPropertiesDelegateImpl.java
+@@ -47,6 +47,7 @@ import org.chromium.chrome.browser.accessibility.PageZoomMenuItemViewBinder;
+ import org.chromium.chrome.browser.bookmarks.BookmarkModel;
+ import org.chromium.chrome.browser.bookmarks.PowerBookmarkUtils;
+ import org.chromium.chrome.browser.commerce.ShoppingServiceFactory;
++import org.chromium.chrome.browser.desktop_site.DesktopSiteUtils;
+ import org.chromium.chrome.browser.download.DownloadUtils;
+ import org.chromium.chrome.browser.flags.ChromeFeatureList;
+ import org.chromium.chrome.browser.incognito.IncognitoUtils;
+@@ -1340,6 +1341,35 @@ public abstract class AppMenuPropertiesDelegateImpl implements AppMenuProperties
+         return new ListItem(AppMenuItemType.TITLE_BUTTON, model);
+     }
+ 
++    /** Builds Titanium's persistent coherent desktop-profile menu item. */
++    protected @Nullable ListItem maybeBuildEnhancedDesktopSiteListItem(
++            @Nullable Tab currentTab, boolean isNativePage, boolean showIcon) {
++        boolean itemVisible =
++                !isNativePage
++                        && currentTab != null
++                        && !currentTab.isIncognitoBranded()
++                        && currentTab.getWebContents() != null
++                        && !DeviceInfo.isDesktop();
++        if (!itemVisible) return null;
++
++        assumeNonNull(currentTab);
++        boolean isEnhancedDesktopSite =
++                DesktopSiteUtils.shouldUseEnhancedDesktopSite(currentTab.getUrl());
++        PropertyModel model =
++                buildModelForMenuItemWithCheckbox(
++                        R.id.request_enhanced_desktop_site_id,
++                        R.string.menu_request_enhanced_desktop_site,
++                        showIcon ? R.drawable.ic_desktop_windows : 0,
++                        R.id.request_enhanced_desktop_site_check_id,
++                        isEnhancedDesktopSite);
++        model.set(
++                AppMenuItemProperties.TITLE_CONDENSED,
++                isEnhancedDesktopSite
++                        ? mContext.getString(R.string.menu_request_enhanced_desktop_site_on)
++                        : mContext.getString(R.string.menu_request_enhanced_desktop_site_off));
++        return new ListItem(AppMenuItemType.TITLE_BUTTON, model);
++    }
++
+     /** Return whether auto darkening is enabled for the current Tab. */
+     @VisibleForTesting(otherwise = VisibleForTesting.PROTECTED)
+     @Contract("null, _-> false")
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/customtabs/CustomTabAppMenuPropertiesDelegate.java b/chrome/android/java/src/org/chromium/chrome/browser/customtabs/CustomTabAppMenuPropertiesDelegate.java
+index ad6ebaa55280e10a68ee97765bc665fa1aaccf4c..5ca6a7c58172649bbf5b233ca01e90eb4e76c2d1 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/customtabs/CustomTabAppMenuPropertiesDelegate.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/customtabs/CustomTabAppMenuPropertiesDelegate.java
+@@ -409,6 +409,9 @@ public class CustomTabAppMenuPropertiesDelegate extends AppMenuPropertiesDelegat
+             MVCListAdapter.ListItem rdsListItem =
+                     maybeBuildRequestDesktopSiteListItem(currentTab, isNativePage, false);
+             if (rdsListItem != null) modelList.add(rdsListItem);
++            MVCListAdapter.ListItem enhancedDesktopListItem =
++                    maybeBuildEnhancedDesktopSiteListItem(currentTab, isNativePage, false);
++            if (enhancedDesktopListItem != null) modelList.add(enhancedDesktopListItem);
+         }
+ 
+         // --- Translate ---
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tab/TabImpl.java b/chrome/android/java/src/org/chromium/chrome/browser/tab/TabImpl.java
+index 78f729288d42cdc0933c22f510771e5db681a12e..a789b6c0291668d431bce493b95233e407312d95 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/tab/TabImpl.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/tab/TabImpl.java
+@@ -837,9 +837,11 @@ class TabImpl implements Tab, TabInternal {
+             GURL fixedUrl = UrlFormatter.fixupUrl(params.getUrl());
+             // Request desktop sites if necessary.
+             if (fixedUrl.isValid()) {
++                updateUserAgentOverrideProfile(fixedUrl);
+                 params.setOverrideUserAgent(calculateUserAgentOverrideOption(fixedUrl));
+             } else {
+                 // Fall back to the Url in webContents for site level setting.
++                updateUserAgentOverrideProfile(null);
+                 params.setOverrideUserAgent(calculateUserAgentOverrideOption(null));
+             }
+ 
+@@ -2247,7 +2249,9 @@ class TabImpl implements Tab, TabInternal {
+ 
+             ContentUtils.setUserAgentOverride(
+                     mWebContents,
+-                    calculateUserAgentOverrideOption(null) == UserAgentOverrideOption.TRUE);
++                    DesktopSiteUtils.shouldOverrideDesktopSite(
++                            mProfile, mWebContents.getVisibleUrl(), getContext()),
++                    DesktopSiteUtils.shouldUseEnhancedDesktopSite(mWebContents.getVisibleUrl()));
+ 
+             updateInteractableState();
+ 
+@@ -2879,6 +2883,16 @@ class TabImpl implements Tab, TabInternal {
+         return userAgentOverrideOption;
+     }
+ 
++    private void updateUserAgentOverrideProfile(@Nullable GURL url) {
++        if (mWebContents == null) return;
++        if (url == null) url = mWebContents.getVisibleUrl();
++        boolean enhancedDesktop = DesktopSiteUtils.shouldUseEnhancedDesktopSite(url);
++        boolean desktop =
++                enhancedDesktop
++                        || DesktopSiteUtils.shouldOverrideDesktopSite(mProfile, url, getContext());
++        ContentUtils.setUserAgentOverride(mWebContents, desktop, enhancedDesktop);
++    }
++
+     // TODO(crbug.com/40195571): Confirm if a new histogram should be used.
+     private void recordHistogramUseDesktopUserAgent(boolean value) {
+         RecordHistogram.recordBooleanHistogram(
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegate.java b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegate.java
+index e248048c4b702e49dab5b54dc60ba33758b101d7..5b28a9f4e5ede253d2b1797cea0064d25c2afb0b 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegate.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegate.java
+@@ -513,6 +513,11 @@ public class TabbedAppMenuPropertiesDelegate extends AppMenuPropertiesDelegateIm
+                         currentTab, isNativePage, shouldShowIconBeforeItem);
+         if (rdsListItem != null) modelList.add(rdsListItem);
+ 
++        ListItem enhancedDesktopListItem =
++                maybeBuildEnhancedDesktopSiteListItem(
++                        currentTab, isNativePage, shouldShowIconBeforeItem);
++        if (enhancedDesktopListItem != null) modelList.add(enhancedDesktopListItem);
++
+         // Auto Dark
+         if (shouldShowAutoDarkItem(currentTab, isNativePage)) {
+             modelList.add(buildAutoDarkItem(currentTab, isNativePage, shouldShowIconBeforeItem));
+@@ -707,6 +712,11 @@ public class TabbedAppMenuPropertiesDelegate extends AppMenuPropertiesDelegateIm
+                         currentTab, isNativePage, shouldShowIconBeforeItem);
+         if (rdsListItem != null) modelList.add(rdsListItem);
+ 
++        ListItem enhancedDesktopListItem =
++                maybeBuildEnhancedDesktopSiteListItem(
++                        currentTab, isNativePage, shouldShowIconBeforeItem);
++        if (enhancedDesktopListItem != null) modelList.add(enhancedDesktopListItem);
++
+         // Auto Dark
+         if (shouldShowAutoDarkItem(currentTab, isNativePage)) {
+             modelList.add(buildAutoDarkItem(currentTab, isNativePage, shouldShowIconBeforeItem));
+diff --git a/chrome/browser/android/content/content_utils.cc b/chrome/browser/android/content/content_utils.cc
+index 31ab0d40cb9b2018769885b3783a491d6cefce9a..51e081de07ef019e5d8d6ee30bdc752a93a1dfa1 100644
+--- a/chrome/browser/android/content/content_utils.cc
++++ b/chrome/browser/android/content/content_utils.cc
+@@ -19,8 +19,10 @@ static std::string JNI_ContentUtils_GetBrowserUserAgent(JNIEnv* env) {
+ static void JNI_ContentUtils_SetUserAgentOverride(
+     JNIEnv* env,
+     const base::android::JavaRef<jobject>& jweb_contents,
+-    bool j_override_in_new_tabs) {
++    bool j_override_in_new_tabs,
++    bool j_enhanced_desktop) {
+   constexpr char kLinuxInfoStr[] = "X11; Linux x86_64";
++  constexpr char kWindowsInfoStr[] = "Windows NT 10.0; Win64; x64";
+   constexpr char kChromeOSInfoStr[] = "X11; CrOS x86_64 14541.0.0";
+ 
+   bool spoof_as_chromeos = base::FeatureList::IsEnabled(
+@@ -34,15 +36,22 @@ static void JNI_ContentUtils_SetUserAgentOverride(
+   blink::UserAgentOverride spoofed_ua;
+   spoofed_ua.ua_string_override =
+       embedder_support::BuildUserAgentFromOSAndProduct(
+-          spoof_as_chromeos ? kChromeOSInfoStr : kLinuxInfoStr,
++          j_enhanced_desktop
++              ? kWindowsInfoStr
++              : (spoof_as_chromeos ? kChromeOSInfoStr : kLinuxInfoStr),
+           embedder_support::GetProductAndVersion());
+   spoofed_ua.ua_metadata_override = metadata;
+   spoofed_ua.ua_metadata_override->platform =
+-      base::FeatureList::IsEnabled(blink::features::kAndroidDesktopUAPlatform)
++      j_enhanced_desktop
++          ? "Windows"
++          : base::FeatureList::IsEnabled(
++                blink::features::kAndroidDesktopUAPlatform)
+           ? "Android"
+           : (spoof_as_chromeos ? "Chrome OS" : "Linux");
+   spoofed_ua.ua_metadata_override->platform_version =
+-      std::string();  // match content::GetOSVersion(false) on Linux
++      j_enhanced_desktop
++          ? "10.0.0"
++          : std::string();  // match content::GetOSVersion(false) on Linux
+   spoofed_ua.ua_metadata_override->model = std::string();
+   spoofed_ua.ua_metadata_override->mobile = false;
+   spoofed_ua.ua_metadata_override->form_factors =
+diff --git a/chrome/browser/android/content/java/src/org/chromium/chrome/browser/content/ContentUtils.java b/chrome/browser/android/content/java/src/org/chromium/chrome/browser/content/ContentUtils.java
+index 8d8beeefa3d3b4ef42a70e2129917c2b9c946722..5c5d6aa3c82640b8520dcb1f0cdae60bea8f1f4b 100644
+--- a/chrome/browser/android/content/java/src/org/chromium/chrome/browser/content/ContentUtils.java
++++ b/chrome/browser/android/content/java/src/org/chromium/chrome/browser/content/ContentUtils.java
+@@ -26,8 +26,14 @@ public class ContentUtils {
+      * for WebContents so that it is available when a NavigationEntry requires the user agent to be
+      * overridden.
+      */
+-    public static void setUserAgentOverride(WebContents webContents, boolean overrideInNewTabs) {
+-        ContentUtilsJni.get().setUserAgentOverride(webContents, overrideInNewTabs);
++    public static void setUserAgentOverride(WebContents webContents, boolean overrideInNewTabs) {
++        setUserAgentOverride(webContents, overrideInNewTabs, /* enhancedDesktop= */ false);
++    }
++
++    public static void setUserAgentOverride(
++            WebContents webContents, boolean overrideInNewTabs, boolean enhancedDesktop) {
++        ContentUtilsJni.get()
++                .setUserAgentOverride(webContents, overrideInNewTabs, enhancedDesktop);
+     }
+ 
+     @NativeMethods
+@@ -35,6 +41,7 @@ public class ContentUtils {
+         @JniType("std::string")
+         String getBrowserUserAgent();
+ 
+-        void setUserAgentOverride(WebContents webContents, boolean overrideInNewTabs);
++        void setUserAgentOverride(
++                WebContents webContents, boolean overrideInNewTabs, boolean enhancedDesktop);
+     }
+ }
+diff --git a/chrome/browser/content_settings/request_desktop_site_web_contents_observer_android.cc b/chrome/browser/content_settings/request_desktop_site_web_contents_observer_android.cc
+index bb030c4e47bc1f80b2bf1f111aa51379d63a6459..17d737f4e593f28a6ff5716b30c1a1fee6b7661c 100644
+--- a/chrome/browser/content_settings/request_desktop_site_web_contents_observer_android.cc
++++ b/chrome/browser/content_settings/request_desktop_site_web_contents_observer_android.cc
+@@ -5,6 +5,8 @@
+ #include "chrome/browser/content_settings/request_desktop_site_web_contents_observer_android.h"
+ 
+ #include <algorithm>
++#include <string_view>
++#include <vector>
+ 
+ #include "base/android/android_info.h"
+ #include "base/android/device_info.h"
+@@ -19,12 +21,16 @@
+ #include "chrome/browser/preferences/android/chrome_shared_preferences.h"
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/common/chrome_switches.h"
++#include "components/embedder_support/user_agent_utils.h"
+ #include "components/content_settings/core/common/content_settings_utils.h"
+ #include "components/content_settings/core/common/pref_names.h"
+ #include "components/prefs/pref_service.h"
+ #include "content/public/browser/navigation_handle.h"
++#include "content/public/browser/web_contents.h"
+ #include "content/public/common/content_features.h"
+ #include "services/metrics/public/cpp/ukm_builders.h"
++#include "third_party/blink/public/common/features.h"
++#include "third_party/blink/public/common/user_agent/user_agent_metadata.h"
+ #include "ui/display/screen.h"
+ 
+ namespace rds_web_contents_observer {
+@@ -37,6 +43,86 @@ enum class UserAgentRequestType {
+ 
+ static std::optional<bool> s_is_oem_allowlisted_for_external_display_desktop_ua;
+ 
++namespace {
++
++constexpr char kEnhancedDesktopHostsPreference[] =
++    "Chrome.Titanium.EnhancedDesktopSiteHosts";
++
++bool IsHostOrSubdomain(std::string_view host, std::string_view domain) {
++  return host == domain ||
++         (host.size() > domain.size() &&
++          host[host.size() - domain.size() - 1] == '.' &&
++          host.substr(host.size() - domain.size()) == domain);
++}
++
++bool IsZoomEnhancedDesktopUrl(const GURL& url) {
++  std::string host = base::ToLowerASCII(url.host());
++  if (IsHostOrSubdomain(host, "marketplace.zoom.us") ||
++      IsHostOrSubdomain(host, "e.zoom.us") ||
++      IsHostOrSubdomain(host, "developers.zoom.us") ||
++      IsHostOrSubdomain(host, "marketplacefront-cf.zoom.us") ||
++      IsHostOrSubdomain(host, "marketplacecontent-cf.zoom.us") ||
++      IsHostOrSubdomain(host, "vaapplicationscontent.zoom.us")) {
++    return true;
++  }
++  return host == "zoom.us" &&
++         (url.path().starts_with("/signin") ||
++          url.path().starts_with("/oauth") ||
++          url.path().starts_with("/account"));
++}
++
++bool ShouldUseEnhancedDesktopProfile(const GURL& url) {
++  if (IsZoomEnhancedDesktopUrl(url)) {
++    return true;
++  }
++  base::android::SharedPreferencesManager shared_prefs =
++      android::shared_preferences::GetChromeSharedPreferences();
++  std::vector<std::string> hosts = base::SplitString(
++      shared_prefs.ReadString(kEnhancedDesktopHostsPreference, std::string()),
++      ",", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
++  std::string host = base::ToLowerASCII(url.host());
++  return std::ranges::find(hosts, host) != hosts.end();
++}
++
++blink::UserAgentOverride BuildDesktopUserAgentOverride(bool enhanced_desktop) {
++  constexpr char kLinuxInfoStr[] = "X11; Linux x86_64";
++  constexpr char kWindowsInfoStr[] = "Windows NT 10.0; Win64; x64";
++  constexpr char kChromeOSInfoStr[] = "X11; CrOS x86_64 14541.0.0";
++  bool spoof_as_chromeos = base::FeatureList::IsEnabled(
++      blink::features::kAndroidDesktopUASpoofAsChromeOS);
++
++  blink::UserAgentMetadata metadata =
++      embedder_support::GetUserAgentMetadata();
++  blink::UserAgentOverride spoofed_ua;
++  spoofed_ua.ua_string_override =
++      embedder_support::BuildUserAgentFromOSAndProduct(
++          enhanced_desktop
++              ? kWindowsInfoStr
++              : (spoof_as_chromeos ? kChromeOSInfoStr : kLinuxInfoStr),
++          embedder_support::GetProductAndVersion());
++  spoofed_ua.ua_metadata_override = metadata;
++  spoofed_ua.ua_metadata_override->platform =
++      enhanced_desktop
++          ? "Windows"
++          : base::FeatureList::IsEnabled(
++                blink::features::kAndroidDesktopUAPlatform)
++                ? "Android"
++                : (spoof_as_chromeos ? "Chrome OS" : "Linux");
++  spoofed_ua.ua_metadata_override->platform_version =
++      enhanced_desktop ? "10.0.0" : std::string();
++  spoofed_ua.ua_metadata_override->model = std::string();
++  spoofed_ua.ua_metadata_override->mobile = false;
++  spoofed_ua.ua_metadata_override->form_factors =
++      embedder_support::GetFormFactorsClientHint(metadata,
++                                                 /*is_mobile=*/false);
++  spoofed_ua.ua_metadata_override->architecture = "x86";
++  spoofed_ua.ua_metadata_override->bitness = "64";
++  spoofed_ua.ua_metadata_override->wow64 = false;
++  return spoofed_ua;
++}
++
++}  // namespace
++
+ RequestDesktopSiteWebContentsObserverAndroid::
+     RequestDesktopSiteWebContentsObserverAndroid(content::WebContents* contents)
+     : content::WebContentsObserver(contents),
+@@ -70,7 +156,8 @@ void RequestDesktopSiteWebContentsObserverAndroid::DidStartNavigation(
+   content_settings::SettingInfo setting_info;
+   ContentSetting setting = host_content_settings_map_->GetContentSetting(
+       url, url, ContentSettingsType::REQUEST_DESKTOP_SITE, &setting_info);
+-  bool desktop_mode = setting == CONTENT_SETTING_ALLOW;
++  bool enhanced_desktop = ShouldUseEnhancedDesktopProfile(url);
++  bool desktop_mode = setting == CONTENT_SETTING_ALLOW || enhanced_desktop;
+   // For --request-desktop-sites, always override the user agent.
+   bool always_request_desktop_site =
+       base::CommandLine::ForCurrentProcess()->HasSwitch(
+@@ -81,7 +168,8 @@ void RequestDesktopSiteWebContentsObserverAndroid::DidStartNavigation(
+   // RDS Window Setting support.
+   if (!base::android::device_info::is_automotive() &&
+       pref_service_->GetBoolean(prefs::kDesktopSiteWindowSettingEnabled) &&
+-      desktop_mode && !always_request_desktop_site && is_global_setting) {
++      desktop_mode && !enhanced_desktop && !always_request_desktop_site &&
++      is_global_setting) {
+     int web_contents_width_dp =
+         web_contents()->GetContainerBounds().size().width();
+     if (web_contents_width_dp > 0 &&
+@@ -94,6 +182,12 @@ void RequestDesktopSiteWebContentsObserverAndroid::DidStartNavigation(
+   bool should_allow_on_external_display =
+       ShouldAllowOnExternalDisplay(is_global_setting);
+   desktop_mode |= should_allow_on_external_display;
++  desktop_mode |= enhanced_desktop;
++
++  // Keep network headers, navigator.userAgentData and renderer state aligned
++  // for browser- and renderer-initiated navigations alike.
++  web_contents()->SetUserAgentOverride(
++      BuildDesktopUserAgentOverride(enhanced_desktop), desktop_mode);
+ 
+   // Override UA for renderer initiated navigation only. UA override for browser
+   // initiated navigation is handled on Java side. This is to workaround known
+diff --git a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+index ed8c42e591783d8ff365a0677f45c6384507c772..d992b8b3a08f733696488049d387b7a0fb0c035d 100644
+--- a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
++++ b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+@@ -395,6 +395,10 @@ public final class ChromePreferenceKeys {
+     public static final String EDUCATIONAL_TIP_LAST_DEFAULT_BROWSER_PROMO_TIMESTAMP =
+             "Chrome.EducationalTip.LastDefaultBrowserPromoTimestamp";
+ 
++    /** Comma-separated exact hosts using Titanium's enhanced desktop profile. */
++    public static final String ENHANCED_DESKTOP_SITE_HOSTS =
++            "Chrome.Titanium.EnhancedDesktopSiteHosts";
++
+     /**
+      * Indicates whether or not there are prefetched content in chrome that can be viewed offline.
+      */
+@@ -1246,6 +1250,7 @@ public final class ChromePreferenceKeys {
+                 DSE_NEW_TAB_URL,
+                 HOME_MODULES_IMPRESSION_COUNT_BEFORE_INTERACTION.pattern(),
+                 EDUCATIONAL_TIP_LAST_DEFAULT_BROWSER_PROMO_TIMESTAMP,
++                ENHANCED_DESKTOP_SITE_HOSTS,
+                 EXPLORE_OFFLINE_CONTENT_AVAILABILITY_STATUS,
+                 EXTENSIONS_CHROME_PAGE_URL_OVERRIDE_ENABLED.pattern(),
+                 FEED_PREVIOUS_WIDESCREEN_STATE,
+diff --git a/chrome/browser/ui/android/desktop_site/java/src/org/chromium/chrome/browser/desktop_site/DesktopSiteUtils.java b/chrome/browser/ui/android/desktop_site/java/src/org/chromium/chrome/browser/desktop_site/DesktopSiteUtils.java
+index 4452fea97e726f4165ee2f41a42af42ef05e9718..9c945988a3366357aca643bce204968903f1034c 100644
+--- a/chrome/browser/ui/android/desktop_site/java/src/org/chromium/chrome/browser/desktop_site/DesktopSiteUtils.java
++++ b/chrome/browser/ui/android/desktop_site/java/src/org/chromium/chrome/browser/desktop_site/DesktopSiteUtils.java
+@@ -43,6 +43,7 @@ import java.util.Collections;
+ import java.util.HashSet;
+ import java.util.Locale;
+ import java.util.Set;
++import java.util.TreeSet;
+ 
+ /** Utility class for desktop sites. */
+ @NullMarked
+@@ -56,6 +57,61 @@ public class DesktopSiteUtils {
+     static final int DEFAULT_GLOBAL_SETTING_DEFAULT_ON_SMALLEST_SCREEN_WIDTH_THRESHOLD_DP = 600;
+     static final int DEFAULT_GLOBAL_SETTING_DEFAULT_ON_MEMORY_LIMIT_THRESHOLD_MB = 6500;
+ 
++    private static boolean isHostOrSubdomain(String host, String domain) {
++        return host.equals(domain) || host.endsWith("." + domain);
++    }
++
++    private static boolean isZoomEnhancedDesktopUrl(GURL url) {
++        String host = url.getHost().toLowerCase(Locale.ROOT);
++        if (isHostOrSubdomain(host, "marketplace.zoom.us")
++                || isHostOrSubdomain(host, "e.zoom.us")
++                || isHostOrSubdomain(host, "developers.zoom.us")
++                || isHostOrSubdomain(host, "marketplacefront-cf.zoom.us")
++                || isHostOrSubdomain(host, "marketplacecontent-cf.zoom.us")
++                || isHostOrSubdomain(host, "vaapplicationscontent.zoom.us")) {
++            return true;
++        }
++        String path = url.getPath();
++        return host.equals("zoom.us")
++                && (path.startsWith("/signin")
++                        || path.startsWith("/oauth")
++                        || path.startsWith("/account"));
++    }
++
++    private static Set<String> readEnhancedDesktopHosts() {
++        String encoded =
++                ChromeSharedPreferences.getInstance()
++                        .readString(ChromePreferenceKeys.ENHANCED_DESKTOP_SITE_HOSTS, "");
++        Set<String> hosts = new TreeSet<>();
++        if (!TextUtils.isEmpty(encoded)) {
++            Collections.addAll(hosts, encoded.split(","));
++        }
++        return hosts;
++    }
++
++    /** Returns whether the URL should use Titanium's coherent enhanced desktop profile. */
++    public static boolean shouldUseEnhancedDesktopSite(@Nullable GURL url) {
++        if (url == null || !url.isValid() || TextUtils.isEmpty(url.getHost())) return false;
++        if (isZoomEnhancedDesktopUrl(url)) return true;
++        return readEnhancedDesktopHosts().contains(url.getHost().toLowerCase(Locale.ROOT));
++    }
++
++    /** Persists the enhanced desktop profile for the exact host of {@code url}. */
++    public static void setEnhancedDesktopSiteForUrl(GURL url, boolean enabled) {
++        if (!url.isValid() || TextUtils.isEmpty(url.getHost())) return;
++        Set<String> hosts = readEnhancedDesktopHosts();
++        String host = url.getHost().toLowerCase(Locale.ROOT);
++        if (enabled) {
++            hosts.add(host);
++        } else {
++            hosts.remove(host);
++        }
++        ChromeSharedPreferences.getInstance()
++                .writeString(
++                        ChromePreferenceKeys.ENHANCED_DESKTOP_SITE_HOSTS,
++                        TextUtils.join(",", hosts));
++    }
++
+     /**
+      * Set or remove a domain level exception with URL for {@link
+      * ContentSettingsType.REQUEST_DESKTOP_SITE}. Clear the subdomain level exception if any.
+@@ -214,6 +270,12 @@ public class DesktopSiteUtils {
+      */
+     public static boolean shouldOverrideDesktopSite(
+             Profile profile, @Nullable GURL url, Context context) {
++        // Enhanced desktop sites always need the desktop navigation override, independently from
++        // the standard Request Desktop Site global/window heuristics.
++        if (shouldUseEnhancedDesktopSite(url)) {
++            return true;
++        }
++
+         // For --request-desktop-sites, always override the user agent.
+         if (CommandLine.getInstance().hasSwitch(ChromeSwitches.REQUEST_DESKTOP_SITES)) {
+             return true;
+diff --git a/chrome/browser/ui/android/desktop_site/java/src/org/chromium/chrome/browser/desktop_site/DesktopSiteUtilsUnitTest.java b/chrome/browser/ui/android/desktop_site/java/src/org/chromium/chrome/browser/desktop_site/DesktopSiteUtilsUnitTest.java
+index 575c004e1b0db5f0aafd2100df980a5bfd998a04..b5acf6c67a8cb9093b0b100985c6abc37def9610 100644
+--- a/chrome/browser/ui/android/desktop_site/java/src/org/chromium/chrome/browser/desktop_site/DesktopSiteUtilsUnitTest.java
++++ b/chrome/browser/ui/android/desktop_site/java/src/org/chromium/chrome/browser/desktop_site/DesktopSiteUtilsUnitTest.java
+@@ -200,9 +200,44 @@ public class DesktopSiteUtilsUnitTest {
+             mSharedPreferencesManager.removeKey(
+                     SingleCategorySettingsConstants
+                             .USER_ENABLED_DESKTOP_SITE_GLOBAL_SETTING_PREFERENCE_KEY);
++            mSharedPreferencesManager.removeKey(
++                    ChromePreferenceKeys.ENHANCED_DESKTOP_SITE_HOSTS);
+         }
+     }
+ 
++    @Test
++    public void testEnhancedDesktopZoomRules() {
++        Assert.assertTrue(
++                DesktopSiteUtils.shouldUseEnhancedDesktopSite(
++                        new GURL("https://marketplace.zoom.us/")));
++        Assert.assertTrue(
++                DesktopSiteUtils.shouldUseEnhancedDesktopSite(
++                        new GURL("https://child.developers.zoom.us/docs")));
++        Assert.assertTrue(
++                DesktopSiteUtils.shouldUseEnhancedDesktopSite(
++                        new GURL("https://zoom.us/signin")));
++        Assert.assertFalse(
++                DesktopSiteUtils.shouldUseEnhancedDesktopSite(
++                        new GURL("https://marketplace.zoom.us.example.com/")));
++        Assert.assertFalse(
++                DesktopSiteUtils.shouldUseEnhancedDesktopSite(
++                        new GURL("https://zoom.us/j/123456")));
++    }
++
++    @Test
++    public void testEnhancedDesktopExactHostPersistence() {
++        GURL url = new GURL("https://example.com/a");
++        GURL subdomain = new GURL("https://sub.example.com/a");
++        Assert.assertFalse(DesktopSiteUtils.shouldUseEnhancedDesktopSite(url));
++
++        DesktopSiteUtils.setEnhancedDesktopSiteForUrl(url, true);
++        Assert.assertTrue(DesktopSiteUtils.shouldUseEnhancedDesktopSite(url));
++        Assert.assertFalse(DesktopSiteUtils.shouldUseEnhancedDesktopSite(subdomain));
++
++        DesktopSiteUtils.setEnhancedDesktopSiteForUrl(url, false);
++        Assert.assertFalse(DesktopSiteUtils.shouldUseEnhancedDesktopSite(url));
++    }
++
+     @Test
+     public void testSetRequestDesktopSiteContentSettingsForUrl_DefaultBlock_Incognito() {
+         // Incognito profile type.
+diff --git a/content/browser/web_contents/web_contents_impl.cc b/content/browser/web_contents/web_contents_impl.cc
+index 7edad76e875c081e4e8d7de917658d006624de91..7af104a4a3dfc098d4c6c0ee504fa514f5613b1a 100644
+--- a/content/browser/web_contents/web_contents_impl.cc
++++ b/content/browser/web_contents/web_contents_impl.cc
+@@ -3900,6 +3900,7 @@ const blink::web_pref::WebPreferences WebContentsImpl::ComputeWebPreferences(
+ 
+ #if BUILDFLAG(IS_ANDROID)
+   bool is_request_android_desktop_site = false;
++  bool is_request_android_enhanced_desktop_site = false;
+ #endif
+ 
+   if (GetController().GetVisibleEntry() &&
+@@ -3910,7 +3911,26 @@ const blink::web_pref::WebPreferences WebContentsImpl::ComputeWebPreferences(
+     is_request_android_desktop_site =
+         renderer_preferences_.user_agent_override.ua_metadata_override &&
+         !renderer_preferences_.user_agent_override.ua_metadata_override->mobile;
++    is_request_android_enhanced_desktop_site =
++        is_request_android_desktop_site &&
++        renderer_preferences_.user_agent_override.ua_metadata_override
++                ->platform == "Windows" &&
++        renderer_preferences_.user_agent_override.ua_string_override.find(
++            "Windows NT 10.0; Win64; x64") != std::string::npos;
+     prefs.viewport_meta_enabled = !is_request_android_desktop_site;
++    if (is_request_android_enhanced_desktop_site) {
++      // Titanium enhanced desktop uses Blink's fixed 1280 CSS px television
++      // viewport profile. Overview mode scales it to the physical display in
++      // portrait and landscape while preserving pinch zoom and input support.
++      prefs.viewport_enabled = true;
++      prefs.viewport_style = blink::mojom::ViewportStyle::kTelevision;
++      prefs.initialize_at_minimum_page_scale = true;
++      prefs.default_minimum_page_scale_factor = 0.1f;
++      prefs.shrinks_viewport_contents_to_fit = true;
++      prefs.use_wide_viewport = true;
++      prefs.force_enable_zoom = true;
++      prefs.auto_zoom_focused_editable_to_legible_scale = false;
++    }
+ #else
+     prefs.viewport_meta_enabled = false;
+ #endif
+diff --git a/third_party/blink/renderer/core/frame/navigator.cc b/third_party/blink/renderer/core/frame/navigator.cc
+index 583f05f8dd5fb74116ad81da63ee7e43445f8060..464bf2b9e9b5c2a3a25196f473a33b6da4de29f6 100644
+--- a/third_party/blink/renderer/core/frame/navigator.cc
++++ b/third_party/blink/renderer/core/frame/navigator.cc
+@@ -56,6 +56,15 @@ String Navigator::vendorSub() const {
+ }
+ 
+ String Navigator::platform() const {
++  // Keep navigator.platform coherent with Chromium's per-WebContents desktop
++  // UA overrides on Android. UA Client Hints are populated by the same
++  // profiles in the browser process.
++  const String& user_agent = userAgent();
++  if (user_agent.contains("Windows NT 10.0; Win64; x64"))
++    return "Win32";
++  if (user_agent.contains("X11; Linux x86_64"))
++    return "Linux x86_64";
++
+   // TODO(955620): Consider changing devtools overrides to only allow overriding
+   // the platform with a frozen platform to distinguish between
+   // mobile and desktop when ReduceUserAgent is enabled.

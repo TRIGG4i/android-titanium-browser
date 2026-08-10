@@ -1,5 +1,28 @@
 #!/bin/bash
 
+# Apply the Chromium 151 enhanced-desktop implementation before the legacy
+# downstream sed transforms. Full blob IDs allow a three-way merge with the
+# pinned Vanadium patch stack when both touch the same source file.
+git apply --3way --whitespace=nowarn \
+    "$SCRIPT_DIR/patches/chromium-151-enhanced-desktop-profile.patch"
+
+desktop_strings=chrome/browser/ui/android/strings/android_chrome_strings.grd
+sed -i '/name="IDS_MENU_REQUEST_DESKTOP_SITE"/,/<\/message>/ s/Desktop site/Desktop standard/' \
+    "$desktop_strings"
+if ! grep -Fq 'IDS_MENU_REQUEST_ENHANCED_DESKTOP_SITE' "$desktop_strings"; then
+sed -i '/name="IDS_MENU_REQUEST_DESKTOP_SITE_OFF"/,/<\/message>/ { /<\/message>/a\
+      <message name="IDS_MENU_REQUEST_ENHANCED_DESKTOP_SITE" desc="Titanium menu item enabling a coherent desktop browser identity and a wide desktop viewport for the current site. [CHAR_LIMIT=24]">\
+        Enhanced desktop\
+      </message>\
+      <message name="IDS_MENU_REQUEST_ENHANCED_DESKTOP_SITE_ON" desc="Accessibility description for when Titanium enhanced desktop mode is enabled.">\
+        Turn off Enhanced desktop\
+      </message>\
+      <message name="IDS_MENU_REQUEST_ENHANCED_DESKTOP_SITE_OFF" desc="Accessibility description for when Titanium enhanced desktop mode is disabled.">\
+        Turn on Enhanced desktop\
+      </message>
+}' "$desktop_strings"
+fi
+
 mkdir -p chrome/android/java/res_titanium_base
 cp $SCRIPT_DIR/res/drawable/themed_app_icon.xml chrome/android/java/res_titanium_base/drawable/themed_app_icon.xml
 for icon in $(find chrome/android/java/res_titanium_base -type f -name '*.png'); do convert $icon -fill navy -tint 36 $icon && $SCRIPT_DIR/res/icon.sh $icon; done

@@ -1,0 +1,89 @@
+name: x86_64 behavior-validation source build
+
+on:
+  workflow_dispatch:
+  # Temporary build-only trigger: the workflow is not dispatchable until its
+  # file exists on the default branch. Retargeting the work PR to the completed
+  # checkpoint branch starts this validation without merging unfinished work.
+  pull_request:
+    branches:
+      - work/final-browser
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: titanium-personal-x86-behavior-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  stage-1:
+    uses: ./.github/workflows/source-build-stage.yml
+    with:
+      stage: 1
+      target_cpu: x64
+    secrets: inherit
+
+  stage-2:
+    needs: stage-1
+    if: needs.stage-1.result == 'success' && needs.stage-1.outputs.complete != 'true'
+    uses: ./.github/workflows/source-build-stage.yml
+    with:
+      stage: 2
+      target_cpu: x64
+    secrets: inherit
+
+  stage-3:
+    needs: [stage-1, stage-2]
+    if: >-
+      always() &&
+      needs.stage-1.result == 'success' &&
+      needs.stage-1.outputs.complete != 'true' &&
+      needs.stage-2.result == 'success' &&
+      needs.stage-2.outputs.complete != 'true'
+    uses: ./.github/workflows/source-build-stage.yml
+    with:
+      stage: 3
+      target_cpu: x64
+    secrets: inherit
+
+  stage-4:
+    needs: [stage-1, stage-2, stage-3]
+    if: >-
+      always() &&
+      needs.stage-1.result == 'success' &&
+      needs.stage-1.outputs.complete != 'true' &&
+      needs.stage-2.result == 'success' &&
+      needs.stage-2.outputs.complete != 'true' &&
+      needs.stage-3.result == 'success' &&
+      needs.stage-3.outputs.complete != 'true'
+    uses: ./.github/workflows/source-build-stage.yml
+    with:
+      stage: 4
+      target_cpu: x64
+    secrets: inherit
+
+  require-behavior-apk:
+    name: Require a validated x86_64 behavior APK
+    if: always()
+    needs: [stage-1, stage-2, stage-3, stage-4]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Confirm one source-build stage completed
+        env:
+          STAGE_1_COMPLETE: ${{ needs.stage-1.outputs.complete }}
+          STAGE_2_COMPLETE: ${{ needs.stage-2.outputs.complete }}
+          STAGE_3_COMPLETE: ${{ needs.stage-3.outputs.complete }}
+          STAGE_4_COMPLETE: ${{ needs.stage-4.outputs.complete }}
+        run: |
+          set -euo pipefail
+          if [[ "$STAGE_1_COMPLETE" == true ||
+                "$STAGE_2_COMPLETE" == true ||
+                "$STAGE_3_COMPLETE" == true ||
+                "$STAGE_4_COMPLETE" == true ]]; then
+            echo 'A source-build stage produced and validated the x86_64 behavior APK.'
+            exit 0
+          fi
+          echo 'No source-build stage produced an x86_64 behavior APK.' >&2
+          exit 1

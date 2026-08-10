@@ -2,6 +2,12 @@ name: Final ARM64 source build
 
 on:
   workflow_dispatch:
+  # Pull-request builds can restore caches from their base branch. This lets the
+  # enhanced-desktop build reuse the completed Chromium checkpoint that lives
+  # on work/final-browser while keeping all new work on its own branch.
+  pull_request:
+    branches:
+      - work/final-browser
 
 permissions:
   actions: write
