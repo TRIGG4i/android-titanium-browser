@@ -249,12 +249,16 @@ diff --git a/chrome/browser/android/content/java/src/org/chromium/chrome/browser
 index 8d8beeefa3d3b4ef42a70e2129917c2b9c946722..5c5d6aa3c82640b8520dcb1f0cdae60bea8f1f4b 100644
 --- a/chrome/browser/android/content/java/src/org/chromium/chrome/browser/content/ContentUtils.java
 +++ b/chrome/browser/android/content/java/src/org/chromium/chrome/browser/content/ContentUtils.java
-@@ -26,8 +26,10 @@ public class ContentUtils {
+@@ -26,8 +26,14 @@ public class ContentUtils {
       * for WebContents so that it is available when a NavigationEntry requires the user agent to be
       * overridden.
       */
 -    public static void setUserAgentOverride(WebContents webContents, boolean overrideInNewTabs) {
 -        ContentUtilsJni.get().setUserAgentOverride(webContents, overrideInNewTabs);
++    public static void setUserAgentOverride(WebContents webContents, boolean overrideInNewTabs) {
++        setUserAgentOverride(webContents, overrideInNewTabs, /* enhancedDesktop= */ false);
++    }
++
 +    public static void setUserAgentOverride(
 +            WebContents webContents, boolean overrideInNewTabs, boolean enhancedDesktop) {
 +        ContentUtilsJni.get()
@@ -262,7 +266,7 @@ index 8d8beeefa3d3b4ef42a70e2129917c2b9c946722..5c5d6aa3c82640b8520dcb1f0cdae60b
      }
  
      @NativeMethods
-@@ -35,6 +37,7 @@ public class ContentUtils {
+@@ -35,6 +41,7 @@ public class ContentUtils {
          @JniType("std::string")
          String getBrowserUserAgent();
  
