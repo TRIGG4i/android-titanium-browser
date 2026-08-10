@@ -2,6 +2,12 @@ name: x86_64 behavior-validation source build
 
 on:
   workflow_dispatch:
+  # Temporary build-only trigger: the workflow is not dispatchable until its
+  # file exists on the default branch. Retargeting the work PR to the completed
+  # checkpoint branch starts this validation without merging unfinished work.
+  pull_request:
+    branches:
+      - work/final-browser
 
 permissions:
   actions: write
