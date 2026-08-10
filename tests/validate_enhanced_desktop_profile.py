@@ -104,7 +104,7 @@ class Cdp:
         target = next(item for item in targets if item.get("type") == "page")
         self.ws = websocket.create_connection(
             target["webSocketDebuggerUrl"],
-            timeout=10,
+            timeout=90,
             origin="http://localhost:9222",
         )
         self.next_id = 1
@@ -114,6 +114,10 @@ class Cdp:
         self.ws.close()
 
     def call(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        # ARM64 Chromium runs through the Android emulator's native bridge on
+        # this x86_64 hosted runner; first-use domain initialization can take
+        # substantially longer than a normal desktop CDP round trip.
+        self.ws.settimeout(90)
         call_id = self.next_id
         self.next_id += 1
         self.ws.send(json.dumps({"id": call_id, "method": method, "params": params or {}}))
