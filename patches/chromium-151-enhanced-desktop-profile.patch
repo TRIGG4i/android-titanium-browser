@@ -332,9 +332,9 @@ index bb030c4e47bc1f80b2bf1f111aa51379d63a6459..17d737f4e593f28a6ff5716b30c1a1fe
 +    return true;
 +  }
 +  return host == "zoom.us" &&
-+         (url.path_piece().starts_with("/signin") ||
-+          url.path_piece().starts_with("/oauth") ||
-+          url.path_piece().starts_with("/account"));
++         (url.path().starts_with("/signin") ||
++          url.path().starts_with("/oauth") ||
++          url.path().starts_with("/account"));
 +}
 +
 +bool ShouldUseEnhancedDesktopProfile(const GURL& url) {

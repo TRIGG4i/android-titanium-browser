@@ -108,11 +108,15 @@ jobs:
 
           if [[ "$build_rc" -eq 0 ]]; then
             echo 'complete=true' >> "$GITHUB_OUTPUT"
+            echo 'failed=false' >> "$GITHUB_OUTPUT"
           elif [[ "$build_rc" -eq 75 ]]; then
             echo 'complete=false' >> "$GITHUB_OUTPUT"
+            echo 'failed=false' >> "$GITHUB_OUTPUT"
           else
             echo "Source build failed with exit code $build_rc" >&2
-            exit "$build_rc"
+            echo 'complete=false' >> "$GITHUB_OUTPUT"
+            echo 'failed=true' >> "$GITHUB_OUTPUT"
+            echo "build_rc=$build_rc" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Validate and sign final ARM64 APK
@@ -281,3 +285,11 @@ jobs:
           path: diagnostics/
           if-no-files-found: error
           retention-days: 14
+
+      - name: Fail after preserving failed compilation checkpoint
+        if: steps.compile.outputs.failed == 'true'
+        env:
+          BUILD_RC: ${{ steps.compile.outputs.build_rc }}
+        run: |
+          echo "Source build failed with exit code $BUILD_RC; resumable output was preserved." >&2
+          exit "$BUILD_RC"
