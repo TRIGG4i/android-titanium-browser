@@ -97,6 +97,30 @@ cp "$SCRIPT_DIR/args.gn" out/Default/args.gn
 # cached output tree untouched.  Content hashes and GN inputs remain pinned.
 find . -path './out' -prune -o -type f -exec touch -h -d '@946684800' {} +
 
+# The fallback checkpoint predates the enhanced desktop profile. Make only the
+# inputs changed by that profile newer than restored Ninja outputs so Chromium
+# incrementally recompiles the affected browser/Blink/Java/resource graph.
+enhanced_desktop_inputs=(
+    chrome/android/java/res/values/ids.xml
+    chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
+    chrome/android/java/src/org/chromium/chrome/browser/app/appmenu/AppMenuPropertiesDelegateImpl.java
+    chrome/android/java/src/org/chromium/chrome/browser/customtabs/CustomTabAppMenuPropertiesDelegate.java
+    chrome/android/java/src/org/chromium/chrome/browser/tab/TabImpl.java
+    chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegate.java
+    chrome/browser/android/content/content_utils.cc
+    chrome/browser/android/content/java/src/org/chromium/chrome/browser/content/ContentUtils.java
+    chrome/browser/content_settings/request_desktop_site_web_contents_observer_android.cc
+    chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
+    chrome/browser/ui/android/desktop_site/java/src/org/chromium/chrome/browser/desktop_site/DesktopSiteUtils.java
+    chrome/browser/ui/android/strings/android_chrome_strings.grd
+    content/browser/web_contents/web_contents_impl.cc
+    third_party/blink/renderer/core/frame/navigator.cc
+)
+for enhanced_desktop_input in "${enhanced_desktop_inputs[@]}"; do
+    test -f "$enhanced_desktop_input"
+    touch -h "$enhanced_desktop_input"
+done
+
 # A one-time cache migration may restore output produced before the personal
 # launcher label changed. Source mtimes are normalized above, so explicitly
 # make this content-bearing Android resource newer than any restored output.

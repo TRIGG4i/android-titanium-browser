@@ -28,6 +28,16 @@ on:
         required: false
         default: 755eb2d2523de833122ab6da8b5bb28d870b33e19a29591c47ec0c3ffa29913a
         type: string
+      base_run_id:
+        description: Run containing the currently installed Personal APK
+        required: false
+        default: '31314699195'
+        type: string
+      base_artifact_name:
+        description: Existing Personal APK artifact used for update testing
+        required: false
+        default: titanium-browser-personal-final-b90814911309d9f5ca658a4d27c7f9e90ffab8ae
+        type: string
 permissions:
   actions: read
   contents: read
@@ -47,6 +57,8 @@ jobs:
       TEST_APK_FILENAME: ${{ inputs.apk_filename || 'Titanium-Browser-Personal-final-arm64-v8a.apk' }}
       TEST_PACKAGE: ${{ inputs.package_name || 'com.trigg4i.titanium.personal' }}
       TEST_EXPECTED_SHA256: ${{ inputs.expected_sha256 || '755eb2d2523de833122ab6da8b5bb28d870b33e19a29591c47ec0c3ffa29913a' }}
+      TEST_BASE_RUN_ID: ${{ inputs.base_run_id || '31314699195' }}
+      TEST_BASE_ARTIFACT_NAME: ${{ inputs.base_artifact_name || 'titanium-browser-personal-final-b90814911309d9f5ca658a4d27c7f9e90ffab8ae' }}
 
     steps:
       - name: Checkout validation instructions
@@ -68,6 +80,12 @@ jobs:
           actual_sha="$(sha256sum "downloaded/$TEST_APK_FILENAME" | awk '{print $1}')"
           [[ "$actual_sha" == "$TEST_EXPECTED_SHA256" ]]
           cp "downloaded/$TEST_APK_FILENAME" downloaded/test.apk
+          gh run download "$TEST_BASE_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "$TEST_BASE_ARTIFACT_NAME" \
+            --dir downloaded/base
+          test -s "downloaded/base/$TEST_APK_FILENAME"
+          cp "downloaded/base/$TEST_APK_FILENAME" downloaded/base.apk
 
       - name: Set up Java for Android SDK tools
         uses: actions/setup-java@v5
@@ -95,6 +113,9 @@ jobs:
           echo "$sdk_root/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
           echo "$sdk_root/platform-tools" >> "$GITHUB_PATH"
           echo "$sdk_root/emulator" >> "$GITHUB_PATH"
+
+      - name: Install CDP validation dependency
+        run: python3 -m pip install --disable-pip-version-check websocket-client==1.8.0
 
       - name: Install Android 16 Google APIs emulator image
         env:
@@ -169,7 +190,10 @@ jobs:
           apk='downloaded/test.apk'
           package="$TEST_PACKAGE"
           adb logcat -c
-          adb install --no-streaming "$apk" | tee diagnostics/adb-install.txt
+          adb install --no-streaming downloaded/base.apk \
+            | tee diagnostics/adb-install-base.txt
+          adb install -r --no-streaming "$apk" | tee diagnostics/adb-install-update.txt
+          grep -Fx 'Success' diagnostics/adb-install-update.txt
           adb shell pm path "$package" | tee diagnostics/package-path.txt
           adb shell dumpsys package "$package" > diagnostics/package-dumpsys.txt
           grep -E 'versionCode=|versionName=|primaryCpuAbi=' diagnostics/package-dumpsys.txt \
@@ -203,6 +227,21 @@ jobs:
           adb logcat -d -v threadtime > diagnostics/logcat.txt
           if grep -En "FATAL EXCEPTION.*${package}|Process: ${package}.*FATAL EXCEPTION" diagnostics/logcat.txt; then
             echo 'Fatal application exception detected after launch' >&2
+            exit 1
+          fi
+
+      - name: Validate enhanced desktop behavior and persistence
+        run: |
+          set -euo pipefail
+          python3 tests/validate_enhanced_desktop_profile.py \
+            --package "$TEST_PACKAGE" \
+            --output diagnostics/enhanced-desktop-profile.json \
+            | tee diagnostics/enhanced-desktop-profile.log
+          adb exec-out screencap -p > diagnostics/zoom-enhanced-desktop.png
+          adb logcat -d -v threadtime > diagnostics/logcat-after-profile-tests.txt
+          if grep -En "FATAL EXCEPTION.*${TEST_PACKAGE}|Process: ${TEST_PACKAGE}.*FATAL EXCEPTION" \
+              diagnostics/logcat-after-profile-tests.txt; then
+            echo 'Fatal application exception detected during enhanced desktop tests' >&2
             exit 1
           fi
 
