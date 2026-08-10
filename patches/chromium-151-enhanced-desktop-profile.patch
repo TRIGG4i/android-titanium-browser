@@ -592,7 +592,7 @@ index 7edad76e875c081e4e8d7de917658d006624de91..7af104a4a3dfc098d4c6c0ee504fa514
  #endif
  
    if (GetController().GetVisibleEntry() &&
-@@ -3910,7 +3911,27 @@ const blink::web_pref::WebPreferences WebContentsImpl::ComputeWebPreferences(
+@@ -3910,7 +3911,26 @@ const blink::web_pref::WebPreferences WebContentsImpl::ComputeWebPreferences(
      is_request_android_desktop_site =
          renderer_preferences_.user_agent_override.ua_metadata_override &&
          !renderer_preferences_.user_agent_override.ua_metadata_override->mobile;
