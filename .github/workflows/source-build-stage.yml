@@ -1,4 +1,4 @@
-name: Chromium ARM64 resumable stage
+name: Chromium resumable source-build stage
 
 on:
   workflow_call:
@@ -7,6 +7,11 @@ on:
         description: Sequential source-build stage number
         required: true
         type: number
+      target_cpu:
+        description: Chromium target CPU (arm64 final delivery or x64 behavior validation)
+        required: false
+        default: arm64
+        type: string
       fallback_cache_identity:
         description: Previous compatible build identity for one-time incremental migration
         required: false
@@ -23,7 +28,7 @@ permissions:
 
 jobs:
   build-stage:
-    name: Chromium ARM64 stage ${{ inputs.stage }}
+    name: Chromium ${{ inputs.target_cpu }} stage ${{ inputs.stage }}
     runs-on: ubuntu-24.04
     timeout-minutes: 350
     outputs:
@@ -79,9 +84,14 @@ jobs:
               res/icon.svg \
               res/drawable/themed_app_icon.xml
             git -C vanadium rev-parse HEAD
+            printf 'target_cpu=%s\n' '${{ inputs.target_cpu }}'
           } > "$RUNNER_TEMP/titanium-build-inputs"
           build_key="$(sha256sum "$RUNNER_TEMP/titanium-build-inputs" | cut -d' ' -f1)"
           echo "key=$build_key" >> "$GITHUB_OUTPUT"
+          if [[ '${{ inputs.target_cpu }}' == arm64 ]]; then
+            echo 'fallback_prefix=titanium-chromium-out-${{ inputs.fallback_cache_identity }}-' \
+              >> "$GITHUB_OUTPUT"
+          fi
           echo "Build cache identity: $build_key"
 
       - name: Restore latest Chromium output checkpoint
@@ -92,12 +102,13 @@ jobs:
           key: titanium-chromium-out-${{ steps.build-key.outputs.key }}-probe
           restore-keys: |
             titanium-chromium-out-${{ steps.build-key.outputs.key }}-
-            titanium-chromium-out-${{ inputs.fallback_cache_identity }}-
+            ${{ steps.build-key.outputs.fallback_prefix }}
 
-      - name: Build Chromium public APK slice for ARM64
+      - name: Build Chromium public APK slice
         id: compile
         env:
           BUILD_SLICE_SECONDS: '15600'
+          TARGET_CPU: ${{ inputs.target_cpu }}
         run: |
           set -o pipefail
           chmod +x build.sh common.sh patch.sh res/icon.sh
@@ -119,17 +130,32 @@ jobs:
             echo "build_rc=$build_rc" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Validate and sign final ARM64 APK
+      - name: Validate and sign APK
         if: steps.compile.outputs.complete == 'true'
         env:
           RELEASE_KEYSTORE_B64: ${{ secrets.TITANIUM_RELEASE_KEYSTORE_B64 }}
           RELEASE_KEY_ALIAS: ${{ secrets.TITANIUM_RELEASE_KEY_ALIAS }}
           RELEASE_STORE_PASSWORD: ${{ secrets.TITANIUM_RELEASE_STORE_PASSWORD }}
           RELEASE_KEY_PASSWORD: ${{ secrets.TITANIUM_RELEASE_KEY_PASSWORD }}
+          TARGET_CPU: ${{ inputs.target_cpu }}
         run: |
           set -euo pipefail
-          source_apk='artifacts/Titanium-Browser-Personal-source-arm64-v8a.apk'
-          final_apk='artifacts/Titanium-Browser-Personal-final-arm64-v8a.apk'
+          case "$TARGET_CPU" in
+            arm64)
+              expected_abi='arm64-v8a'
+              source_apk='artifacts/Titanium-Browser-Personal-source-arm64-v8a.apk'
+              final_apk='artifacts/Titanium-Browser-Personal-final-arm64-v8a.apk'
+              ;;
+            x64)
+              expected_abi='x86_64'
+              source_apk='artifacts/Titanium-Browser-Personal-source-x86_64.apk'
+              final_apk='artifacts/Titanium-Browser-Personal-behavior-x86_64.apk'
+              ;;
+            *)
+              echo "Unsupported target CPU: $TARGET_CPU" >&2
+              exit 1
+              ;;
+          esac
           test -s "$source_apk"
           test -n "$RELEASE_KEYSTORE_B64"
           test -n "$RELEASE_KEY_ALIAS"
@@ -164,7 +190,7 @@ jobs:
 
           mapfile -t abi_dirs < <(zipinfo -1 "$final_apk" | sed -n 's#^lib/\([^/]*\)/.*#\1#p' | sort -u)
           printf '%s\n' "${abi_dirs[@]}" | tee artifacts/abis.txt
-          [[ "${#abi_dirs[@]}" -eq 1 && "${abi_dirs[0]}" == 'arm64-v8a' ]]
+          [[ "${#abi_dirs[@]}" -eq 1 && "${abi_dirs[0]}" == "$expected_abi" ]]
 
           "$aapt2" dump badging "$final_apk" | tee artifacts/aapt-badging.txt
           grep -F "package: name='com.trigg4i.titanium.personal'" \
@@ -183,37 +209,38 @@ jobs:
             artifacts/apksigner-verification.txt
           (
             cd artifacts
-            sha256sum Titanium-Browser-Personal-final-arm64-v8a.apk \
-              | tee SHA256SUMS.txt
+            sha256sum "$(basename "$final_apk")" | tee SHA256SUMS.txt
           )
           stat --printf='%n %s bytes\n' "$final_apk" | tee artifacts/size.txt
 
-          cp INSTALLATION.md artifacts/
-          cp BUILD_REPORT.md artifacts/
-          cp FINAL_BUILD_REPORT.md artifacts/
-          cp FINAL_FEATURE_MATRIX.md artifacts/
-          cp FINAL_KNOWN_LIMITATIONS.md artifacts/
-          cp UPDATE_GUIDE.md artifacts/
-          cp CHANGELOG_FINAL.md artifacts/
-          cp LICENSES_AND_CREDITS.md artifacts/
-          cp LICENSE artifacts/LICENSE
-          cp WORK_MASTER_INSTRUCTIONS.md artifacts/
+          if [[ "$TARGET_CPU" == arm64 ]]; then
+            cp INSTALLATION.md artifacts/
+            cp BUILD_REPORT.md artifacts/
+            cp FINAL_BUILD_REPORT.md artifacts/
+            cp FINAL_FEATURE_MATRIX.md artifacts/
+            cp FINAL_KNOWN_LIMITATIONS.md artifacts/
+            cp UPDATE_GUIDE.md artifacts/
+            cp CHANGELOG_FINAL.md artifacts/
+            cp LICENSES_AND_CREDITS.md artifacts/
+            cp LICENSE artifacts/LICENSE
+            cp WORK_MASTER_INSTRUCTIONS.md artifacts/
 
-          (
-            cd artifacts
-            zip -9 Titanium-Browser-Personal-final.zip \
-              Titanium-Browser-Personal-final-arm64-v8a.apk \
-              SHA256SUMS.txt \
-              INSTALLATION.md \
-              BUILD_REPORT.md \
-              FINAL_BUILD_REPORT.md \
-              FINAL_FEATURE_MATRIX.md \
-              FINAL_KNOWN_LIMITATIONS.md \
-              UPDATE_GUIDE.md \
-              CHANGELOG_FINAL.md \
-              LICENSES_AND_CREDITS.md \
-              LICENSE
-          )
+            (
+              cd artifacts
+              zip -9 Titanium-Browser-Personal-final.zip \
+                Titanium-Browser-Personal-final-arm64-v8a.apk \
+                SHA256SUMS.txt \
+                INSTALLATION.md \
+                BUILD_REPORT.md \
+                FINAL_BUILD_REPORT.md \
+                FINAL_FEATURE_MATRIX.md \
+                FINAL_KNOWN_LIMITATIONS.md \
+                UPDATE_GUIDE.md \
+                CHANGELOG_FINAL.md \
+                LICENSES_AND_CREDITS.md \
+                LICENSE
+            )
+          fi
           rm -f "$keystore"
 
       - name: Capture stage diagnostics
@@ -240,7 +267,7 @@ jobs:
 
       - name: Save resumable Chromium output checkpoint
         id: save
-        if: steps.compile.outputs.complete == 'false'
+        if: steps.compile.outputs.complete != ''
         uses: actions/cache/save@v4
         with:
           path: chromium/src/out/Default
@@ -258,7 +285,7 @@ jobs:
           fi
 
       - name: Upload final APK and delivery ZIP
-        if: steps.compile.outputs.complete == 'true'
+        if: steps.compile.outputs.complete == 'true' && inputs.target_cpu == 'arm64'
         uses: actions/upload-artifact@v4
         with:
           name: titanium-browser-personal-final-${{ github.sha }}
@@ -276,6 +303,25 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 30
+
+      - name: Upload x86_64 behavior-validation APK
+        if: steps.compile.outputs.complete == 'true' && inputs.target_cpu == 'x64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: titanium-browser-personal-behavior-x86_64-${{ github.sha }}
+          path: |
+            artifacts/Titanium-Browser-Personal-behavior-x86_64.apk
+            artifacts/SHA256SUMS.txt
+            artifacts/apksigner-verification.txt
+            artifacts/aapt-badging.txt
+            artifacts/abis.txt
+            artifacts/size.txt
+            artifacts/file-report.txt
+            artifacts/zipalign-report.txt
+            artifacts/SOURCE_BUILD_METADATA.txt
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
 
       - name: Upload stage diagnostics
         if: always()

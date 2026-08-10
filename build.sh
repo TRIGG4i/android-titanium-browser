@@ -12,6 +12,16 @@ PATCH_WORK_DIR="$CHROMIUM_DIR/vanadium-patches"
 ARTIFACT_DIR="$SCRIPT_DIR/artifacts"
 EXPECTED_VANADIUM_COMMIT="13c840a88df07096553710c9459b3e2ecd278235"
 BUILD_SLICE_SECONDS="${BUILD_SLICE_SECONDS:-15600}"
+TARGET_CPU="${TARGET_CPU:-arm64}"
+
+case "$TARGET_CPU" in
+    arm64) OUTPUT_ABI="arm64-v8a" ;;
+    x64) OUTPUT_ABI="x86_64" ;;
+    *)
+        echo "Unsupported TARGET_CPU: $TARGET_CPU" >&2
+        exit 1
+        ;;
+esac
 
 export VERSION CHROMIUM_SOURCE DEBIAN_FRONTEND=noninteractive
 export GIT_COMMITTER_NAME="Titanium Personal Builder"
@@ -90,6 +100,9 @@ gclient runhooks
 source "$SCRIPT_DIR/patch.sh"
 mkdir -p out/Default
 cp "$SCRIPT_DIR/args.gn" out/Default/args.gn
+sed -i -E "s/^target_cpu = \"[^\"]+\"$/target_cpu = \"$TARGET_CPU\"/" \
+    out/Default/args.gn
+grep -Fx "target_cpu = \"$TARGET_CPU\"" out/Default/args.gn
 
 # Git checkouts receive fresh mtimes on every hosted runner.  A resumed Ninja
 # output cache would otherwise look older than every source file and rebuild
@@ -163,7 +176,7 @@ if [[ "${#apk_candidates[@]}" -ne 1 ]]; then
     exit 1
 fi
 
-output_apk="$ARTIFACT_DIR/Titanium-Browser-Personal-source-arm64-v8a.apk"
+output_apk="$ARTIFACT_DIR/Titanium-Browser-Personal-source-$OUTPUT_ABI.apk"
 cp "${apk_candidates[0]}" "$output_apk"
 
 repo_commit="$(git -C "$SCRIPT_DIR" rev-parse HEAD)"
@@ -171,7 +184,7 @@ cat > "$ARTIFACT_DIR/SOURCE_BUILD_METADATA.txt" <<EOF
 repository_commit=$repo_commit
 chromium_version=$VERSION
 vanadium_commit=$actual_vanadium_commit
-target_cpu=arm64
+target_cpu=$TARGET_CPU
 target=chrome_public_apk
 package=com.trigg4i.titanium.personal
 EOF

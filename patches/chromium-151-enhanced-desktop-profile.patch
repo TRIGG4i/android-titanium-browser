@@ -12,7 +12,7 @@ index b145eea10b173ad91b8944fb960cae513e8ba99e..b115021111e7883a095b7d9632025179
      <item type="id" name="auto_dark_web_contents_check_id" />
      <item type="id" name="paint_preview_show_id" />
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
-index bc53c8309c5dbf52fbb6a00fb48b4129b28bf49c..cd61af2927c2fa7a0e5e61071daca0f5eb719f76 100644
+index bc53c8309c5dbf52fbb6a00fb48b4129b28bf49c..fb51606707eefeb0169042d88292a67ddab1d29d 100644
 --- a/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
 @@ -112,6 +112,7 @@ import org.chromium.chrome.browser.compositor.layouts.LayoutManagerImpl;
@@ -39,12 +39,13 @@ index bc53c8309c5dbf52fbb6a00fb48b4129b28bf49c..cd61af2927c2fa7a0e5e61071daca0f5
              // Use TabUtils.switchUserAgent() instead of Tab.reload(). Because we need to reload
              // with LoadOriginalRequestURL. See http://crbug.com/40894824 for details.
              TabUtils.switchUserAgent(currentTab, usingDesktopUserAgent);
-@@ -3101,6 +3109,30 @@ public abstract class ChromeActivity extends AsyncInitializationActivity
+@@ -3101,6 +3109,31 @@ public abstract class ChromeActivity extends AsyncInitializationActivity
              return true;
          }
  
 +        if (id == R.id.request_enhanced_desktop_site_id
 +                || id == R.id.request_enhanced_desktop_site_check_id) {
++            if (currentTab.isIncognitoBranded()) return false;
 +            boolean enhancedDesktop =
 +                    !DesktopSiteUtils.shouldUseEnhancedDesktopSite(currentTab.getUrl());
 +            Profile profile = getCurrentTabModel().getProfile();
@@ -71,7 +72,7 @@ index bc53c8309c5dbf52fbb6a00fb48b4129b28bf49c..cd61af2927c2fa7a0e5e61071daca0f5
              // Get values needed to check/enable auto dark for the current site.
              Profile profile = getCurrentTabModel().getProfile();
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/app/appmenu/AppMenuPropertiesDelegateImpl.java b/chrome/android/java/src/org/chromium/chrome/browser/app/appmenu/AppMenuPropertiesDelegateImpl.java
-index ca950caa15b62ac286b6f58dd2cfd86a2fcb516f..dc42178d3526b1e1563912876b7ed018e2d8cf54 100644
+index ca950caa15b62ac286b6f58dd2cfd86a2fcb516f..8602baf5fc475c6dd1842e100e1759410d8d6320 100644
 --- a/chrome/android/java/src/org/chromium/chrome/browser/app/appmenu/AppMenuPropertiesDelegateImpl.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/app/appmenu/AppMenuPropertiesDelegateImpl.java
 @@ -47,6 +47,7 @@ import org.chromium.chrome.browser.accessibility.PageZoomMenuItemViewBinder;
@@ -82,7 +83,7 @@ index ca950caa15b62ac286b6f58dd2cfd86a2fcb516f..dc42178d3526b1e1563912876b7ed018
  import org.chromium.chrome.browser.download.DownloadUtils;
  import org.chromium.chrome.browser.flags.ChromeFeatureList;
  import org.chromium.chrome.browser.incognito.IncognitoUtils;
-@@ -1340,6 +1341,34 @@ public abstract class AppMenuPropertiesDelegateImpl implements AppMenuProperties
+@@ -1340,6 +1341,35 @@ public abstract class AppMenuPropertiesDelegateImpl implements AppMenuProperties
          return new ListItem(AppMenuItemType.TITLE_BUTTON, model);
      }
  
@@ -92,6 +93,7 @@ index ca950caa15b62ac286b6f58dd2cfd86a2fcb516f..dc42178d3526b1e1563912876b7ed018
 +        boolean itemVisible =
 +                !isNativePage
 +                        && currentTab != null
++                        && !currentTab.isIncognitoBranded()
 +                        && currentTab.getWebContents() != null
 +                        && !DeviceInfo.isDesktop();
 +        if (!itemVisible) return null;

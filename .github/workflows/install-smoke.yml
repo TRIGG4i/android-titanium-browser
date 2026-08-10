@@ -1,4 +1,4 @@
-name: ARM64 APK install smoke test
+name: Android APK install and behavior test
 
 on:
   workflow_dispatch:
@@ -25,6 +25,16 @@ on:
         description: Expected APK SHA-256
         required: true
         type: string
+      install_base:
+        description: Install the previous ARM64 APK first to prove update compatibility
+        required: false
+        default: true
+        type: boolean
+      run_behavior_tests:
+        description: Run the CDP enhanced-desktop browser behavior suite
+        required: false
+        default: true
+        type: boolean
       base_run_id:
         description: Run containing the currently installed Personal APK
         required: false
@@ -40,13 +50,13 @@ permissions:
   contents: read
 
 concurrency:
-  group: titanium-personal-arm64-install-smoke
+  group: titanium-personal-install-smoke
   cancel-in-progress: false
 
 jobs:
   install-smoke:
-    name: Install and launch ARM64 APK on Android 16
-    runs-on: ubuntu-24.04-arm
+    name: Install and launch APK on Android 16
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
     env:
       TEST_SOURCE_RUN_ID: ${{ inputs.source_run_id }}
@@ -54,6 +64,7 @@ jobs:
       TEST_APK_FILENAME: ${{ inputs.apk_filename || 'Titanium-Browser-Personal-final-arm64-v8a.apk' }}
       TEST_PACKAGE: ${{ inputs.package_name || 'com.trigg4i.titanium.personal' }}
       TEST_EXPECTED_SHA256: ${{ inputs.expected_sha256 }}
+      TEST_INSTALL_BASE: ${{ inputs.install_base }}
       TEST_BASE_RUN_ID: ${{ inputs.base_run_id || '31314699195' }}
       TEST_BASE_ARTIFACT_NAME: ${{ inputs.base_artifact_name || 'titanium-browser-personal-final-b90814911309d9f5ca658a4d27c7f9e90ffab8ae' }}
 
@@ -63,7 +74,7 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Download signed ARM64 APK
+      - name: Download signed test APK
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -77,6 +88,13 @@ jobs:
           actual_sha="$(sha256sum "downloaded/$TEST_APK_FILENAME" | awk '{print $1}')"
           [[ "$actual_sha" == "$TEST_EXPECTED_SHA256" ]]
           cp "downloaded/$TEST_APK_FILENAME" downloaded/test.apk
+
+      - name: Download currently installed ARM64 APK
+        if: inputs.install_base
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
           gh run download "$TEST_BASE_RUN_ID" \
             --repo "$GITHUB_REPOSITORY" \
             --name "$TEST_BASE_ARTIFACT_NAME" \
@@ -128,12 +146,12 @@ jobs:
           sdkmanager --install \
             'platform-tools' \
             'emulator' \
-            'system-images;android-36;google_apis;arm64-v8a' \
+            'system-images;android-36;google_apis;x86_64' \
             | tee diagnostics/sdk-install.log
           printf 'no\n' | avdmanager create avd \
             --force \
             --name titanium-api36 \
-            --package 'system-images;android-36;google_apis;arm64-v8a' \
+            --package 'system-images;android-36;google_apis;x86_64' \
             --device pixel_6
 
       - name: Boot Android 16 emulator with KVM
@@ -165,7 +183,7 @@ jobs:
           device_deadline=$((SECONDS + 900))
           until [[ "$(adb get-state 2>/dev/null || true)" == device ]]; do
             if (( SECONDS >= device_deadline )); then
-              echo 'Timed out waiting for the ARM64 emulator device' >&2
+              echo 'Timed out waiting for the Android emulator device' >&2
               exit 1
             fi
             sleep 10
@@ -191,10 +209,15 @@ jobs:
           apk='downloaded/test.apk'
           package="$TEST_PACKAGE"
           adb logcat -c
-          adb install --no-streaming downloaded/base.apk \
-            | tee diagnostics/adb-install-base.txt
-          adb install -r --no-streaming "$apk" | tee diagnostics/adb-install-update.txt
-          grep -Fx 'Success' diagnostics/adb-install-update.txt
+          if [[ "$TEST_INSTALL_BASE" == true ]]; then
+            adb install --no-streaming downloaded/base.apk \
+              | tee diagnostics/adb-install-base.txt
+            adb install -r --no-streaming "$apk" | tee diagnostics/adb-install-update.txt
+            grep -Fx 'Success' diagnostics/adb-install-update.txt
+          else
+            adb install --no-streaming "$apk" | tee diagnostics/adb-install-clean.txt
+            grep -Fx 'Success' diagnostics/adb-install-clean.txt
+          fi
           adb shell pm path "$package" | tee diagnostics/package-path.txt
           adb shell dumpsys package "$package" > diagnostics/package-dumpsys.txt
           grep -E 'versionCode=|versionName=|primaryCpuAbi=' diagnostics/package-dumpsys.txt \
@@ -232,6 +255,7 @@ jobs:
           fi
 
       - name: Validate enhanced desktop behavior and persistence
+        if: inputs.run_behavior_tests
         run: |
           set -euo pipefail
           python3 tests/validate_enhanced_desktop_profile.py \
@@ -255,7 +279,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v5
         with:
-          name: titanium-arm64-install-smoke-${{ github.sha }}
+          name: titanium-install-smoke-${{ github.sha }}-${{ github.run_id }}
           path: diagnostics/
           if-no-files-found: error
           retention-days: 14

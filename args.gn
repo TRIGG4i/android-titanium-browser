@@ -1,5 +1,6 @@
 chrome_public_manifest_package = "com.trigg4i.titanium.personal"
-android_default_version_code = "792207200"
+ext_version_enabled = true
+ext_version_increment = "1"
 is_desktop_android = true
 target_os = "android"
 target_cpu = "arm64"
