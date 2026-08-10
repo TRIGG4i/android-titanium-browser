@@ -46,7 +46,7 @@ concurrency:
 jobs:
   install-smoke:
     name: Install and launch ARM64 APK on Android 16
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 120
     env:
       TEST_SOURCE_RUN_ID: ${{ inputs.source_run_id }}
@@ -128,12 +128,12 @@ jobs:
           sdkmanager --install \
             'platform-tools' \
             'emulator' \
-            'system-images;android-36;google_apis;x86_64' \
+            'system-images;android-36;google_apis;arm64-v8a' \
             | tee diagnostics/sdk-install.log
           printf 'no\n' | avdmanager create avd \
             --force \
             --name titanium-api36 \
-            --package 'system-images;android-36;google_apis;x86_64' \
+            --package 'system-images;android-36;google_apis;arm64-v8a' \
             --device pixel_6
 
       - name: Boot Android 16 emulator with KVM
@@ -141,11 +141,15 @@ jobs:
           ANDROID_AVD_HOME: ${{ runner.temp }}/avd
         run: |
           set -euo pipefail
-          test -e /dev/kvm
-          sudo chmod 666 /dev/kvm
+          accel_mode=off
+          if [[ -e /dev/kvm ]]; then
+            sudo chmod 666 /dev/kvm
+            accel_mode=on
+          fi
           adb start-server
-          emulator -accel-check | tee diagnostics/emulator-acceleration.txt
+          emulator -accel-check 2>&1 | tee diagnostics/emulator-acceleration.txt || true
           emulator @titanium-api36 \
+            -accel "$accel_mode" \
             -no-window \
             -no-audio \
             -no-boot-anim \
