@@ -23,16 +23,62 @@ ZOOM_MOBILE_MESSAGE = (
 )
 
 
-def adb(*args: str, timeout: int = 60) -> str:
+def adb(*args: str, timeout: int = 60, input_text: str | None = None) -> str:
     result = subprocess.run(
         ["adb", *args],
-        check=True,
+        check=False,
+        input=input_text,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         timeout=timeout,
     )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"ADB command failed ({result.returncode}): adb {' '.join(args)}\n"
+            f"{result.stdout.strip()}"
+        )
     return result.stdout.strip()
+
+
+def configure_chromium_command_line(package: str) -> dict[str, str]:
+    # Chromium's own Android launcher sets the package as the persistent debug
+    # app before reading /data/local/tmp/chrome-command-line.  Rooting adbd on
+    # the disposable emulator also makes replacement robust when a stale flags
+    # file has different ownership.
+    root_result = subprocess.run(
+        ["adb", "root"],
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=60,
+    )
+    adb("wait-for-device", timeout=120)
+    adb("shell", "am", "set-debug-app", "--persistent", package)
+    flags = (
+        "_ --disable-fre --no-first-run --remote-debugging-port=9222 "
+        "--remote-allow-origins=*\n"
+    )
+    adb("shell", "rm -f /data/local/tmp/chrome-command-line")
+    adb(
+        "shell",
+        "cat > /data/local/tmp/chrome-command-line",
+        input_text=flags,
+    )
+    adb("shell", "chmod", "0644", "/data/local/tmp/chrome-command-line")
+    installed_flags = adb("shell", "cat", "/data/local/tmp/chrome-command-line")
+    if installed_flags != flags.strip():
+        raise RuntimeError(f"Unexpected Chromium command line: {installed_flags!r}")
+    return {
+        "adbRoot": root_result.stdout.strip(),
+        "flags": installed_flags,
+    }
+
+
+def write_results(path: Path, results: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(results, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def wait_for_debug_endpoint(timeout: int = 90) -> list[dict[str, Any]]:
@@ -276,72 +322,67 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
 
-    adb(
-        "shell",
-        "sh",
-        "-c",
-        "printf '%s\\n' 'chrome --disable-fre --no-first-run "
-        "--remote-debugging-port=9222 --remote-allow-origins=*' "
-        "> /data/local/tmp/chrome-command-line",
-    )
-    adb("forward", "--remove", "tcp:9222") if "tcp:9222" in adb("forward", "--list") else None
-    adb("forward", "tcp:9222", "localabstract:chrome_devtools_remote")
-
     results: dict[str, Any] = {}
-    launch(args.package, PERSISTENCE_URL)
-    cdp = Cdp()
-    cdp.navigate(PERSISTENCE_URL)
-    results["before_manual_enable"] = cdp.evaluate(PROFILE_EXPRESSION)
-    cdp.close()
+    try:
+        results["command_line_setup"] = configure_chromium_command_line(args.package)
+        adb("forward", "--remove", "tcp:9222") if "tcp:9222" in adb("forward", "--list") else None
+        adb("forward", "tcp:9222", "localabstract:chrome_devtools_remote")
+        adb("shell", "settings", "put", "system", "accelerometer_rotation", "0")
+        adb("shell", "settings", "put", "system", "user_rotation", "0")
 
-    enable_enhanced_from_menu()
-    cdp = Cdp()
-    results["manual_enable"] = cdp.evaluate(PROFILE_EXPRESSION)
-    assert_enhanced(results["manual_enable"], "manual enable")
-    cdp.close()
+        launch(args.package, PERSISTENCE_URL)
+        cdp = Cdp()
+        cdp.navigate(PERSISTENCE_URL)
+        results["before_manual_enable"] = cdp.evaluate(PROFILE_EXPRESSION)
+        cdp.close()
 
-    launch(args.package, PERSISTENCE_URL)
-    cdp = Cdp()
-    cdp.navigate(PERSISTENCE_URL)
-    results["after_restart"] = cdp.evaluate(PROFILE_EXPRESSION)
-    assert_enhanced(results["after_restart"], "persistence after restart")
+        enable_enhanced_from_menu()
+        cdp = Cdp()
+        results["manual_enable"] = cdp.evaluate(PROFILE_EXPRESSION)
+        assert_enhanced(results["manual_enable"], "manual enable")
+        cdp.close()
 
-    adb("shell", "settings", "put", "system", "accelerometer_rotation", "0")
-    adb("shell", "settings", "put", "system", "user_rotation", "1")
-    time.sleep(5)
-    results["landscape"] = cdp.evaluate(PROFILE_EXPRESSION)
-    assert_enhanced(results["landscape"], "landscape")
-    assert "landscape" in results["landscape"]["orientationType"], results["landscape"]
+        launch(args.package, PERSISTENCE_URL)
+        cdp = Cdp()
+        cdp.navigate(PERSISTENCE_URL)
+        results["after_restart"] = cdp.evaluate(PROFILE_EXPRESSION)
+        assert_enhanced(results["after_restart"], "persistence after restart")
 
-    adb("shell", "settings", "put", "system", "user_rotation", "0")
-    time.sleep(5)
-    results["portrait"] = cdp.evaluate(PROFILE_EXPRESSION)
-    assert_enhanced(results["portrait"], "portrait")
-    assert "portrait" in results["portrait"]["orientationType"], results["portrait"]
+        adb("shell", "settings", "put", "system", "user_rotation", "1")
+        time.sleep(5)
+        results["landscape"] = cdp.evaluate(PROFILE_EXPRESSION)
+        assert_enhanced(results["landscape"], "landscape")
+        assert "landscape" in results["landscape"]["orientationType"], results["landscape"]
 
-    adb("shell", "input", "keyevent", "KEYCODE_TAB")
-    adb("shell", "input", "keyevent", "KEYCODE_DPAD_DOWN")
-    results["input_smoke_process"] = adb("shell", "pidof", args.package)
+        adb("shell", "settings", "put", "system", "user_rotation", "0")
+        time.sleep(5)
+        results["portrait"] = cdp.evaluate(PROFILE_EXPRESSION)
+        assert_enhanced(results["portrait"], "portrait")
+        assert "portrait" in results["portrait"]["orientationType"], results["portrait"]
 
-    cdp.navigate(ZOOM_URL)
-    results["zoom"] = cdp.evaluate(PROFILE_EXPRESSION)
-    assert_enhanced(results["zoom"], "Zoom Marketplace automatic rule")
-    headers = request_headers(cdp, "marketplace.zoom.us")
-    results["zoom_request_headers"] = headers
-    response = document_response(cdp, "marketplace.zoom.us")
-    results["zoom_document_response"] = response
-    assert "Windows NT 10.0; Win64; x64" in headers.get("user-agent", ""), headers
-    assert headers.get("sec-ch-ua-mobile") == "?0", headers
-    assert headers.get("sec-ch-ua-platform") == '"Windows"', headers
-    assert 200 <= response["status"] < 400, response
-    assert results["zoom"]["url"].startswith("https://marketplace.zoom.us/"), results["zoom"]
-    assert results["zoom"]["title"].strip(), results["zoom"]
-    assert results["zoom"]["bodyTextLength"] > 100, results["zoom"]
-    assert results["zoom"]["mobileBlockingMessageVisible"] is False, results["zoom"]
-    cdp.close()
+        adb("shell", "input", "keyevent", "KEYCODE_TAB")
+        adb("shell", "input", "keyevent", "KEYCODE_DPAD_DOWN")
+        results["input_smoke_process"] = adb("shell", "pidof", args.package)
 
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(results, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        cdp.navigate(ZOOM_URL)
+        results["zoom"] = cdp.evaluate(PROFILE_EXPRESSION)
+        assert_enhanced(results["zoom"], "Zoom Marketplace automatic rule")
+        headers = request_headers(cdp, "marketplace.zoom.us")
+        results["zoom_request_headers"] = headers
+        response = document_response(cdp, "marketplace.zoom.us")
+        results["zoom_document_response"] = response
+        assert "Windows NT 10.0; Win64; x64" in headers.get("user-agent", ""), headers
+        assert headers.get("sec-ch-ua-mobile") == "?0", headers
+        assert headers.get("sec-ch-ua-platform") == '"Windows"', headers
+        assert 200 <= response["status"] < 400, response
+        assert results["zoom"]["url"].startswith("https://marketplace.zoom.us/"), results["zoom"]
+        assert results["zoom"]["title"].strip(), results["zoom"]
+        assert results["zoom"]["bodyTextLength"] > 100, results["zoom"]
+        assert results["zoom"]["mobileBlockingMessageVisible"] is False, results["zoom"]
+        cdp.close()
+    finally:
+        write_results(args.output, results)
+
     print(json.dumps(results, indent=2, sort_keys=True))
 
 

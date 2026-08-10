@@ -5,13 +5,11 @@ on:
     inputs:
       source_run_id:
         description: Run containing the signed APK artifact
-        required: false
-        default: '31314699195'
+        required: true
         type: string
       artifact_name:
         description: Exact artifact name to download
-        required: false
-        default: titanium-browser-personal-final-b90814911309d9f5ca658a4d27c7f9e90ffab8ae
+        required: true
         type: string
       apk_filename:
         description: APK filename inside the artifact
@@ -25,8 +23,7 @@ on:
         type: string
       expected_sha256:
         description: Expected APK SHA-256
-        required: false
-        default: 755eb2d2523de833122ab6da8b5bb28d870b33e19a29591c47ec0c3ffa29913a
+        required: true
         type: string
       base_run_id:
         description: Run containing the currently installed Personal APK
@@ -52,11 +49,11 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     env:
-      TEST_SOURCE_RUN_ID: ${{ inputs.source_run_id || '31314699195' }}
-      TEST_ARTIFACT_NAME: ${{ inputs.artifact_name || 'titanium-browser-personal-final-b90814911309d9f5ca658a4d27c7f9e90ffab8ae' }}
+      TEST_SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+      TEST_ARTIFACT_NAME: ${{ inputs.artifact_name }}
       TEST_APK_FILENAME: ${{ inputs.apk_filename || 'Titanium-Browser-Personal-final-arm64-v8a.apk' }}
       TEST_PACKAGE: ${{ inputs.package_name || 'com.trigg4i.titanium.personal' }}
-      TEST_EXPECTED_SHA256: ${{ inputs.expected_sha256 || '755eb2d2523de833122ab6da8b5bb28d870b33e19a29591c47ec0c3ffa29913a' }}
+      TEST_EXPECTED_SHA256: ${{ inputs.expected_sha256 }}
       TEST_BASE_RUN_ID: ${{ inputs.base_run_id || '31314699195' }}
       TEST_BASE_ARTIFACT_NAME: ${{ inputs.base_artifact_name || 'titanium-browser-personal-final-b90814911309d9f5ca658a4d27c7f9e90ffab8ae' }}
 
